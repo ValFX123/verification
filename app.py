@@ -455,9 +455,11 @@ def detect_alt_account(user, account_age, ip_info, email_analysis, duplicate_che
     if not user.get('banner'):
         risk_score += 5
         flags.append("No custom banner")
-    if not user.get('bio'):
-        risk_score += 5
-        flags.append("No bio")
+    # Bio isn't provided by /users/@me for most accounts, so we don't use it
+    # in the risk calculation to avoid false "no bio" flags.
+    # if not user.get('bio'):
+    #     risk_score += 5
+    #     flags.append("No bio")
     
     # Username analysis
     username = user.get('username', '')
@@ -734,7 +736,8 @@ def send_verification_log(user, ip_info, account_age, alt_detection, vpn_check, 
         
         has_banner = "✅ Yes" if user.get("banner") else "❌ No"
         has_avatar = "✅ Yes" if avatar_hash else "❌ No (Default)"
-        has_bio = "✅ Yes" if user.get("bio") else "❌ No"
+        # /users/@me usually doesn't include the profile bio, so we mark it as unavailable
+        has_bio = "ℹ️ Not available via API"
         
         public_flags = user.get('public_flags', 0)
         badges = decode_public_flags(public_flags)
@@ -777,7 +780,8 @@ def send_verification_log(user, ip_info, account_age, alt_detection, vpn_check, 
             # 1–5: Basic account
             {"name": "Username", "value": f"`{username}`", "inline": True},
             {"name": "User ID", "value": f"`{user_id}`", "inline": True},
-            {"name": "Badges", "value": badge_str[:100], "inline": True},
+            {"name": "Badges (public flags)", "value": badge_str[:100], "inline": True},
+
 
             # 6–8: Email
             {"name": "Email", "value": f"{email}\n{email_verified}", "inline": True},
@@ -797,10 +801,10 @@ def send_verification_log(user, ip_info, account_age, alt_detection, vpn_check, 
                 "inline": True,
             },
             {
-                "name": "Servers & Connections",
+                "name": "Servers & Linked Accounts",
                 "value": (
                     f"Servers: {guilds_info['count']} (Owned: {guilds_info['owned']})\n"
-                    f"Connections: {connections_info['count']} (Verified: {connections_info['verified']})"
+                    f"Linked accounts: {connections_info['count']} (Verified: {connections_info['verified']})"
                 ),
                 "inline": False,
             },
@@ -814,7 +818,7 @@ def send_verification_log(user, ip_info, account_age, alt_detection, vpn_check, 
             },
             {
                 "name": "Public Flags",
-                "value": f"Raw: `{public_flags}`\nBadge Count: {0 if badges == ['None'] else len(badges)}",
+                "value": f"Raw: `{public_flags}`\nFlag Count: {0 if badges == ['None'] else len(badges)}",
                 "inline": True,
             },
 
