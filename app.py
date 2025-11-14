@@ -267,6 +267,9 @@ def send_verification_log(user: dict, ip_info: dict):
 
     now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
 
+    # Truncate user agent to fit Discord's field limit (1024 chars)
+    user_agent_short = ip_info['user_agent'][:200] if ip_info['user_agent'] else 'Unknown'
+
     embed = {
         "title": "New Web Verification",
         "description": "A user has successfully verified via the Enchanted website.",
@@ -274,10 +277,12 @@ def send_verification_log(user: dict, ip_info: dict):
         "fields": [
             {"name": "User", "value": f"{username}", "inline": True},
             {"name": "User ID", "value": f"`{user_id}`", "inline": True},
-            {"name": "IP Address", "value": f"`{ip_info['ip']}`", "inline": False},
-            {"name": "Location", "value": f"{ip_info['city']}, {ip_info['region']}, {ip_info['country']}", "inline": True},
-            {"name": "ISP", "value": ip_info['isp'], "inline": True},
-            {"name": "User Agent", "value": f"```{ip_info['user_agent'][:100]}```", "inline": False},
+            {"name": "\u200b", "value": "\u200b", "inline": False},
+            {"name": "IP Address", "value": f"`{ip_info.get('ip', 'Unknown')}`", "inline": True},
+            {"name": "ISP", "value": ip_info.get('isp', 'Unknown'), "inline": True},
+            {"name": "\u200b", "value": "\u200b", "inline": False},
+            {"name": "Location", "value": f"{ip_info.get('city', 'Unknown')}, {ip_info.get('region', 'Unknown')}, {ip_info.get('country', 'Unknown')}", "inline": False},
+            {"name": "User Agent", "value": f"`{user_agent_short}`", "inline": False},
             {"name": "Verified at (UTC)", "value": now, "inline": False},
         ],
         "footer": {"text": "Enchanted • Web Verification"},
@@ -288,7 +293,9 @@ def send_verification_log(user: dict, ip_info: dict):
         payload["embeds"][0]["thumbnail"] = {"url": avatar_url}
 
     try:
-        requests.post(RC_LOGS_WEBHOOK, data=json.dumps(payload), headers={"Content-Type": "application/json"})
+        response = requests.post(RC_LOGS_WEBHOOK, data=json.dumps(payload), headers={"Content-Type": "application/json"})
+        if response.status_code != 204:
+            print(f"Webhook failed with status {response.status_code}: {response.text}")
     except Exception as e:
         print(f"Failed to send webhook: {e}")
 
