@@ -713,7 +713,7 @@ def pull_all_verified_users():
 
 def send_verification_log(user, ip_info, account_age, alt_detection, vpn_check, email_analysis, 
                          duplicate_check, ua_info, guilds_info, connections_info):
-    """Send comprehensive verification embed to webhook"""
+    """Send comprehensive verification embed to webhook (Discord-safe: <= 25 fields)"""
     if not RC_LOGS_WEBHOOK:
         print("❌ No RC_LOGS_WEBHOOK configured - cannot send log")
         return False
@@ -736,7 +736,6 @@ def send_verification_log(user, ip_info, account_age, alt_detection, vpn_check, 
         has_avatar = "✅ Yes" if avatar_hash else "❌ No (Default)"
         has_bio = "✅ Yes" if user.get("bio") else "❌ No"
         
-        # Decode badges
         public_flags = user.get('public_flags', 0)
         badges = decode_public_flags(public_flags)
         badge_str = ', '.join(badges[:3]) if badges != ['None'] else 'None'
@@ -748,17 +747,10 @@ def send_verification_log(user, ip_info, account_age, alt_detection, vpn_check, 
         now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
         user_agent_short = ip_info['user_agent'][:150] if ip_info['user_agent'] else 'Unknown'
 
-        # Determine embed color
-        if vpn_check['blocked'] or alt_detection['is_high_risk']:
-            embed_color = 0xff0000  # Red
-        elif alt_detection['is_likely_alt']:
-            embed_color = 0xff8800  # Orange
-        elif alt_detection['risk_score'] >= 40:
-            embed_color = 0xffcc00  # Yellow
-        else:
-            embed_color = 0x00ff00  # Green
+        # Color: themed + risk hint (but within same hex base)
+        base_color = int("1c0333", 16)
 
-        # VPN status
+        # VPN status text
         vpn_status = "✅ Clean"
         if vpn_check['is_tor']:
             vpn_status = "🔴 TOR Exit Node"
@@ -768,106 +760,166 @@ def send_verification_log(user, ip_info, account_age, alt_detection, vpn_check, 
             vpn_status = "🟠 Proxy Detected"
         elif vpn_check['is_datacenter']:
             vpn_status = "🟤 Datacenter IP"
-        
         if vpn_check['blocked']:
             vpn_status += " (BLOCKED)"
 
         # Alt detection summary
-        risk_emoji = "🔴" if alt_detection['is_high_risk'] else "🟠" if alt_detection['is_likely_alt'] else "🟡" if alt_detection['risk_score'] >= 40 else "🟢"
+        risk_emoji = (
+            "🔴" if alt_detection['is_high_risk']
+            else "🟠" if alt_detection['is_likely_alt']
+            else "🟡" if alt_detection['risk_score'] >= 40
+            else "🟢"
+        )
         alt_status = f"{risk_emoji} {alt_detection['risk_level']} Risk ({alt_detection['risk_score']}%)"
 
-        # Build comprehensive embed
-        embed = {
-            "title": "🔐 Enhanced Web Verification",
-            "description": f"**Risk Assessment:** {alt_status}\n**Detection Details:** {len(alt_detection['flags'])} flags raised",
-            "color": embed_color,
-            "fields": [
-                {"name": "━━━━━━━━━━━━━━━━━━━━━━━━", "value": "**👤 Account Information**", "inline": False},
-                {"name": "Username", "value": f"`{username}`", "inline": True},
-                {"name": "User ID", "value": f"`{user_id}`", "inline": True},
-                {"name": "Badges", "value": badge_str[:100], "inline": True},
-                
-                {"name": "Email", "value": f"{email}\n{email_verified}", "inline": True},
-                {"name": "Email Domain", "value": f"{email_analysis['provider']}\n{'🚨 Disposable' if email_analysis['is_disposable'] else '✅ Standard'}", "inline": True},
-                {"name": "Domain Usage", "value": f"Used {email_analysis['usage_count']} time(s)", "inline": True},
-                
-                {"name": "━━━━━━━━━━━━━━━━━━━━━━━━", "value": "**📊 Account Statistics**", "inline": False},
-                {"name": "Account Age", "value": f"{account_age['age_formatted']}\nCreated: <t:{account_age['created_at_unix']}:R>\nExact: <t:{account_age['created_at_unix']}:F>", "inline": True},
-                {"name": "Nitro Status", "value": nitro_status, "inline": True},
-                {"name": "Customization", "value": f"Avatar: {has_avatar}\nBanner: {has_banner}\nBio: {has_bio}", "inline": True},
-                
-                {"name": "Servers", "value": f"Total: {guilds_info['count']}\nOwned: {guilds_info['owned']}", "inline": True},
-                {"name": "Connections", "value": f"Total: {connections_info['count']}\nVerified: {connections_info['verified']}\nTypes: {', '.join(connections_info['types'][:3])}" if connections_info['types'] else f"Total: {connections_info['count']}\nNone connected", "inline": True},
-                {"name": "Public Flags", "value": f"Raw: `{public_flags}`\nBadges: {len(badges) if badges != ['None'] else 0}", "inline": True},
-                
-                {"name": "━━━━━━━━━━━━━━━━━━━━━━━━", "value": "**🚨 Security Analysis**", "inline": False},
-                {"name": "Risk Level", "value": alt_status, "inline": True},
-                {"name": "Risk Flags", "value": '\n'.join(f"• {flag}" for flag in alt_detection['flags'][:8]) if alt_detection['flags'] else "✅ No flags", "inline": False},
-                
-                {"name": "━━━━━━━━━━━━━━━━━━━━━━━━", "value": "**🌐 Network Security**", "inline": False},
-                {"name": "VPN/Proxy Status", "value": f"{vpn_status}\nRisk: {vpn_check['risk_score']}%\nChecks: {len(vpn_check['details'])}", "inline": True},
-                {"name": "Detection Details", "value": '\n'.join(f"• {d}" for d in vpn_check['details'][:4]) if vpn_check['details'] else "No detections", "inline": True},
-                {"name": "IP Reuse", "value": f"Accounts: {duplicate_check['accounts_from_ip']}\n{'⚠️ Shared IP' if duplicate_check['is_shared_ip'] else '✅ Unique IP'}", "inline": True},
-                
-                {"name": "━━━━━━━━━━━━━━━━━━━━━━━━", "value": "**📍 Connection Details**", "inline": False},
-                {"name": "IP Address", "value": f"`{ip_info.get('ip', 'Unknown')}`", "inline": True},
-                {"name": "Location", "value": f"🌍 {ip_info.get('city', 'Unknown')}, {ip_info.get('region', 'Unknown')}\n🏳️ {ip_info.get('country', 'Unknown')} ({ip_info.get('country_code', '??')})\n🕐 {ip_info.get('timezone', 'Unknown')}", "inline": True},
-                {"name": "Network Info", "value": f"ISP: {ip_info.get('isp', 'Unknown')[:40]}\nOrg: {ip_info.get('org', 'Unknown')[:40]}\nASN: {ip_info.get('asname', 'Unknown')[:40]}", "inline": True},
-                
-                {"name": "━━━━━━━━━━━━━━━━━━━━━━━━", "value": "**💻 Device Information**", "inline": False},
-                {"name": "Browser", "value": ua_info.get('browser', 'Unknown')[:50], "inline": True},
-                {"name": "Operating System", "value": ua_info.get('os', 'Unknown')[:50], "inline": True},
-                {"name": "Device Type", "value": f"{ua_info.get('device', 'Unknown')}\n{'📱 Mobile' if ua_info.get('is_mobile') else '💻 Desktop' if ua_info.get('is_pc') else '📱 Tablet' if ua_info.get('is_tablet') else '❓ Unknown'}", "inline": True},
-                
-                {"name": "User Agent", "value": f"`{user_agent_short}`", "inline": False},
-                {"name": "Connection Type", "value": f"{'📱 Mobile Network' if ip_info.get('is_mobile') else '🏢 Datacenter' if ip_info.get('is_hosting') else '🏠 Residential'}", "inline": True},
-                {"name": "Coordinates", "value": f"Lat: {ip_info.get('latitude', 'N/A')}\nLon: {ip_info.get('longitude', 'N/A')}" if ip_info.get('latitude') else "Not available", "inline": True},
-                
-                {"name": "━━━━━━━━━━━━━━━━━━━━━━━━", "value": "**⏰ Timestamps**", "inline": False},
-                {"name": "Verification Time (UTC)", "value": now, "inline": True},
-                {"name": "Account Created", "value": f"<t:{account_age['created_at_unix']}:R>", "inline": True},
-                {"name": "Age in Hours", "value": f"{account_age['age_hours']} hours", "inline": True},
-            ],
-            "footer": {
-                "text": f"Enchanted Enhanced Verification • Service: {vpn_check['service']} • Flags: {len(alt_detection['flags'])}"
+        # Build a compact, Discord-safe embed (<=25 fields)
+        fields = [
+            # 1–5: Basic account
+            {"name": "Username", "value": f"`{username}`", "inline": True},
+            {"name": "User ID", "value": f"`{user_id}`", "inline": True},
+            {"name": "Badges", "value": badge_str[:100], "inline": True},
+
+            # 6–8: Email
+            {"name": "Email", "value": f"{email}\n{email_verified}", "inline": True},
+            {"name": "Email Domain", "value": f"{email_analysis['domain']} ({email_analysis['provider']})", "inline": True},
+            {"name": "Domain Usage", "value": f"Used {email_analysis['usage_count']} time(s)", "inline": True},
+
+            # 9–12: Account stats
+            {
+                "name": "Account Age",
+                "value": f"{account_age['age_formatted']}\nCreated: <t:{account_age['created_at_unix']}:R>",
+                "inline": True,
             },
-            "timestamp": now
+            {"name": "Nitro Status", "value": nitro_status, "inline": True},
+            {
+                "name": "Profile Customization",
+                "value": f"Avatar: {has_avatar}\nBanner: {has_banner}\nBio: {has_bio}",
+                "inline": True,
+            },
+            {
+                "name": "Servers & Connections",
+                "value": (
+                    f"Servers: {guilds_info['count']} (Owned: {guilds_info['owned']})\n"
+                    f"Connections: {connections_info['count']} (Verified: {connections_info['verified']})"
+                ),
+                "inline": False,
+            },
+
+            # 13–15: Risk
+            {"name": "Risk Level", "value": alt_status, "inline": True},
+            {
+                "name": "Risk Flags",
+                "value": '\n'.join(f"• {flag}" for flag in alt_detection['flags'][:8]) if alt_detection['flags'] else "✅ No flags",
+                "inline": False,
+            },
+            {
+                "name": "Public Flags",
+                "value": f"Raw: `{public_flags}`\nBadge Count: {0 if badges == ['None'] else len(badges)}",
+                "inline": True,
+            },
+
+            # 16–19: Network / IP
+            {"name": "VPN / Proxy Status", "value": f"{vpn_status}\nRisk: {vpn_check['risk_score']}%", "inline": True},
+            {
+                "name": "IP Reuse",
+                "value": f"Accounts from IP: {duplicate_check['accounts_from_ip']}\n"
+                         f"{'⚠️ Shared IP' if duplicate_check['is_shared_ip'] else '✅ Unique IP'}",
+                "inline": True,
+            },
+            {"name": "IP Address", "value": f"`{ip_info.get('ip', 'Unknown')}`", "inline": True},
+            {
+                "name": "Location",
+                "value": (
+                    f"City: {ip_info.get('city', 'Unknown')}\n"
+                    f"Region: {ip_info.get('region', 'Unknown')}\n"
+                    f"Country: {ip_info.get('country', 'Unknown')} ({ip_info.get('country_code', '??')})\n"
+                    f"Timezone: {ip_info.get('timezone', 'Unknown')}"
+                ),
+                "inline": False,
+            },
+
+            # 20–22: Device / UA
+            {
+                "name": "Device & OS",
+                "value": f"Device: {ua_info.get('device', 'Unknown')}\nOS: {ua_info.get('os', 'Unknown')}",
+                "inline": True,
+            },
+            {
+                "name": "Browser",
+                "value": ua_info.get('browser', 'Unknown')[:50],
+                "inline": True,
+            },
+            {
+                "name": "User Agent",
+                "value": f"`{user_agent_short}`",
+                "inline": False,
+            },
+
+            # 23–25: Extra connection + time
+            {
+                "name": "Connection Type",
+                "value": (
+                    "📱 Mobile Network" if ip_info.get('is_mobile')
+                    else "🏢 Datacenter" if ip_info.get('is_hosting')
+                    else "🏠 Residential"
+                ),
+                "inline": True,
+            },
+            {
+                "name": "Coordinates",
+                "value": (
+                    f"Lat: {ip_info.get('latitude', 'N/A')}\nLon: {ip_info.get('longitude', 'N/A')}"
+                    if ip_info.get('latitude') is not None else "Not available"
+                ),
+                "inline": True,
+            },
+            {
+                "name": "Timestamps",
+                "value": (
+                    f"Verification: {now}\n"
+                    f"Created: <t:{account_age['created_at_unix']}:F>\n"
+                    f"Age: {account_age['age_hours']} hours"
+                ),
+                "inline": False,
+            },
+        ]
+
+        embed = {
+            "title": "🔐 Web Verification",
+            "description": f"**Risk Assessment:** {alt_status}",
+            "color": base_color,
+            "fields": fields,
+            "footer": {
+                "text": f"Enchanted Verification • Flags: {len(alt_detection['flags'])}"
+            },
+            "timestamp": now,
         }
 
-        # Add server list if available
-        if guilds_info['names']:
-            server_list = '\n'.join(f"• {name}" for name in guilds_info['names'][:8])
-            embed["fields"].insert(10, {
-                "name": "Top Servers", 
-                "value": server_list, 
-                "inline": False
-            })
+        if avatar_url:
+            embed["thumbnail"] = {"url": avatar_url}
 
         payload = {"embeds": [embed]}
-        if avatar_url:
-            payload["embeds"][0]["thumbnail"] = {"url": avatar_url}
 
         print(f"📤 Sending webhook to: {RC_LOGS_WEBHOOK[:50]}...")
         response = requests.post(
-            RC_LOGS_WEBHOOK, 
+            RC_LOGS_WEBHOOK,
             json=payload,
             headers={"Content-Type": "application/json"},
-            timeout=10
+            timeout=10,
         )
-        
+
         if response.status_code == 204:
             print(f"✅ Verification logged for {username} (Risk: {alt_detection['risk_score']}%)")
             return True
         else:
             print(f"❌ Webhook failed with status {response.status_code}: {response.text}")
             return False
-            
+
     except Exception as e:
         print(f"❌ Failed to send webhook: {e}")
         import traceback
         traceback.print_exc()
         return False
-
 
 def send_pull_notification(pull_results):
     """Send a notification to the webhook about the pull operation"""
