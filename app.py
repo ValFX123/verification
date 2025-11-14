@@ -9,10 +9,10 @@ from flask import Flask, redirect, request, url_for, render_template_string
 app = Flask(__name__)
 
 # ---------------- CONFIG ----------------
-CLIENT_ID = os.getenv("1438917287666126858")
-CLIENT_SECRET = os.getenv("jSoqVRO7WnKaY9nW0SWQAY8yu4TVZXV7")
+CLIENT_ID = os.getenv("DISCORD_CLIENT_ID")  # ✅ FIXED
+CLIENT_SECRET = os.getenv("DISCORD_CLIENT_SECRET")  # ✅ FIXED
 REDIRECT_URI = os.getenv("DISCORD_REDIRECT_URI")
-RC_LOGS_WEBHOOK = os.getenv("https://discord.com/api/webhooks/1438917705926312087/VK3tI0N18JqiNtxi3Q-t0B-6pLFjTfdutdM5PSvMzOnDqIAq_v6tAAfL4EbMI2hu6kL_")
+RC_LOGS_WEBHOOK = os.getenv("RC_LOGS_WEBHOOK")  # ✅ FIXED
 
 OAUTH_SCOPE = "identify"
 DISCORD_API_BASE = "https://discord.com/api"
@@ -165,7 +165,7 @@ ERROR_PAGE_HTML = """
 </html>
 """
 
-# ---------------- HELPER FUNCTIES ----------------
+# ---------------- HELPER FUNCTIONS ----------------
 
 def build_oauth_url():
     params = {
@@ -209,7 +209,7 @@ def get_discord_user(access_token: str) -> dict | None:
 
 def send_verification_log(user: dict):
     """
-    Stuurt een embed naar je rc-logs webhook met alleen veilige info:
+    Sends an embed to your RC logs webhook with safe info:
     - Username
     - ID
     - Timestamp
