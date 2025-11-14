@@ -1113,26 +1113,41 @@ def config_check():
 @app.route("/test-webhook")
 def test_webhook():
     """Test webhook endpoint to verify it's working"""
+    print("=" * 60)
+    print("🧪 WEBHOOK TEST STARTED")
+    print("=" * 60)
+    
     if not RC_LOGS_WEBHOOK:
+        print("❌ RC_LOGS_WEBHOOK is NOT SET in environment variables")
         return jsonify({
             "error": "RC_LOGS_WEBHOOK not configured",
-            "webhook_set": False
+            "webhook_set": False,
+            "help": "Set the RC_LOGS_WEBHOOK environment variable in your Render dashboard"
         }), 500
     
+    print(f"✅ Webhook URL is set")
+    print(f"📍 Webhook URL: {RC_LOGS_WEBHOOK[:70]}...")
+    print(f"🔗 Full length: {len(RC_LOGS_WEBHOOK)} characters")
+    
     try:
+        # Create a simple test embed
         test_embed = {
             "title": "🧪 Webhook Test",
             "description": "This is a test message to verify the webhook is working correctly.",
             "color": 0x00ff00,
             "fields": [
                 {"name": "Status", "value": "✅ Webhook is configured", "inline": True},
-                {"name": "Timestamp", "value": datetime.utcnow().isoformat(), "inline": True}
+                {"name": "Timestamp", "value": datetime.utcnow().isoformat(), "inline": True},
+                {"name": "Test ID", "value": f"{datetime.utcnow().timestamp()}", "inline": False}
             ],
-            "footer": {"text": "Enchanted Verification System"}
+            "footer": {"text": "Enchanted Verification System • Test Message"}
         }
         
         payload = {"embeds": [test_embed]}
-        print(f"🧪 Testing webhook: {RC_LOGS_WEBHOOK[:50]}...")
+        
+        print(f"📦 Payload created:")
+        print(json.dumps(payload, indent=2)[:500])
+        print(f"\n🚀 Sending POST request to webhook...")
         
         response = requests.post(
             RC_LOGS_WEBHOOK,
@@ -1141,30 +1156,139 @@ def test_webhook():
             timeout=10
         )
         
-        print(f"Response status: {response.status_code}")
-        if response.status_code != 204:
-            print(f"Response body: {response.text}")
+        print(f"📨 Response received:")
+        print(f"   Status Code: {response.status_code}")
+        print(f"   Headers: {dict(response.headers)}")
         
+        if response.status_code == 204:
+            print("✅ SUCCESS! Webhook message sent successfully!")
+            return jsonify({
+                "success": True,
+                "status_code": response.status_code,
+                "webhook_set": True,
+                "webhook_url_preview": RC_LOGS_WEBHOOK[:70] + "...",
+                "message": "Webhook test successful! Check your Discord channel."
+            }), 200
+        else:
+            print(f"❌ FAILED with status {response.status_code}")
+            print(f"   Response body: {response.text}")
+            return jsonify({
+                "success": False,
+                "status_code": response.status_code,
+                "webhook_set": True,
+                "webhook_url_preview": RC_LOGS_WEBHOOK[:70] + "...",
+                "response_text": response.text,
+                "error": "Webhook returned non-204 status code"
+            }), 200
+        
+    except requests.exceptions.Timeout:
+        print("❌ TIMEOUT: Request took longer than 10 seconds")
         return jsonify({
-            "success": response.status_code == 204,
-            "status_code": response.status_code,
+            "error": "Request timeout",
             "webhook_set": True,
-            "webhook_url_preview": RC_LOGS_WEBHOOK[:50] + "...",
-            "response_text": response.text if response.status_code != 204 else "Success (204 No Content)"
-        }), 200
+            "message": "The webhook request timed out after 10 seconds"
+        }), 500
+        
+    except requests.exceptions.ConnectionError as e:
+        print(f"❌ CONNECTION ERROR: {str(e)}")
+        return jsonify({
+            "error": "Connection error",
+            "webhook_set": True,
+            "message": str(e)
+        }), 500
         
     except Exception as e:
-        print(f"❌ Webhook test error: {e}")
+        print(f"❌ UNEXPECTED ERROR: {type(e).__name__}: {str(e)}")
         import traceback
         traceback.print_exc()
         return jsonify({
             "error": str(e),
+            "error_type": type(e).__name__,
             "webhook_set": True,
             "traceback": traceback.format_exc()
         }), 500
+    finally:
+        print("=" * 60)
+        print("🧪 WEBHOOK TEST ENDED")
+        print("=" * 60)
 
 
-@app.route("/send-test-log")
+@app.route("/verify-webhook")
+def verify_webhook_url():
+    """Verify the webhook URL format and test connectivity"""
+    if not RC_LOGS_WEBHOOK:
+        return jsonify({
+            "error": "RC_LOGS_WEBHOOK not configured",
+            "valid": False
+        }), 500
+    
+    # Check if URL format is correct
+    checks = {
+        "url_set": bool(RC_LOGS_WEBHOOK),
+        "starts_with_https": RC_LOGS_WEBHOOK.startswith("https://"),
+        "contains_discord": "discord.com" in RC_LOGS_WEBHOOK or "discordapp.com" in RC_LOGS_WEBHOOK,
+        "contains_webhooks": "/webhooks/" in RC_LOGS_WEBHOOK,
+        "has_token": RC_LOGS_WEBHOOK.count("/") >= 5,
+        "length_valid": len(RC_LOGS_WEBHOOK) > 100
+    }
+    
+    all_passed = all(checks.values())
+    
+    return jsonify({
+        "webhook_configured": True,
+        "webhook_preview": RC_LOGS_WEBHOOK[:80] + "...",
+        "webhook_length": len(RC_LOGS_WEBHOOK),
+        "checks": checks,
+        "all_checks_passed": all_passed,
+        "recommendation": "All checks passed! Try /test-webhook to send a test message." if all_passed else "Some checks failed. Verify your webhook URL is correct."
+    }), 200
+
+
+@app.route("/debug-webhook")
+def debug_webhook():
+    """Comprehensive webhook debugging"""
+    debug_info = {
+        "environment_variables": {
+            "RC_LOGS_WEBHOOK": "SET" if RC_LOGS_WEBHOOK else "NOT SET",
+            "webhook_length": len(RC_LOGS_WEBHOOK) if RC_LOGS_WEBHOOK else 0,
+            "DISCORD_BOT_TOKEN": "SET" if BOT_TOKEN else "NOT SET",
+            "DISCORD_GUILD_ID": "SET" if GUILD_ID else "NOT SET"
+        },
+        "webhook_url_analysis": {},
+        "test_result": None
+    }
+    
+    if RC_LOGS_WEBHOOK:
+        debug_info["webhook_url_analysis"] = {
+            "preview": RC_LOGS_WEBHOOK[:80] + "...",
+            "starts_with_https": RC_LOGS_WEBHOOK.startswith("https://"),
+            "contains_discord": "discord" in RC_LOGS_WEBHOOK.lower(),
+            "contains_api": "/api/" in RC_LOGS_WEBHOOK,
+            "contains_webhooks": "/webhooks/" in RC_LOGS_WEBHOOK,
+            "url_parts_count": RC_LOGS_WEBHOOK.count("/"),
+            "total_length": len(RC_LOGS_WEBHOOK)
+        }
+        
+        # Try a simple test
+        try:
+            response = requests.post(
+                RC_LOGS_WEBHOOK,
+                json={"content": "Debug test from verification system"},
+                timeout=5
+            )
+            debug_info["test_result"] = {
+                "success": response.status_code == 204,
+                "status_code": response.status_code,
+                "response_text": response.text[:200] if response.text else "Empty (success)"
+            }
+        except Exception as e:
+            debug_info["test_result"] = {
+                "success": False,
+                "error": str(e),
+                "error_type": type(e).__name__
+            }
+    
+    return jsonify(debug_info), 200
 def send_test_log():
     """Send a test verification log to see if webhook works"""
     if not RC_LOGS_WEBHOOK:
@@ -1423,11 +1547,33 @@ if __name__ == "__main__":
     print("=" * 60)
     print(f"✅ Server starting on http://0.0.0.0:8080")
     print(f"🔗 Verification URL: {REDIRECT_URI.replace('/callback', '/verify') if REDIRECT_URI else 'NOT SET'}")
-    print(f"🧪 Test Endpoints:")
-    print(f"   - /test-webhook - Test if webhook works")
-    print(f"   - /send-test-log - Send a full test verification log")
-    print(f"   - /config - Check configuration")
-    print(f"   - /stats - View statistics")
+    print(f"\n🧪 Debugging & Test Endpoints:")
+    print(f"   - /verify-webhook    - Verify webhook URL format")
+    print(f"   - /debug-webhook     - Comprehensive webhook debugging")
+    print(f"   - /test-webhook      - Send simple test message")
+    print(f"   - /send-test-log     - Send full test verification log")
+    print(f"   - /config            - Check configuration")
+    print(f"   - /stats             - View statistics")
     print("=" * 60)
+    
+    # Auto-test webhook on startup if configured
+    if RC_LOGS_WEBHOOK:
+        print("\n🔍 Auto-testing webhook on startup...")
+        try:
+            test_response = requests.post(
+                RC_LOGS_WEBHOOK,
+                json={"content": "✅ Verification system started successfully!"},
+                timeout=5
+            )
+            if test_response.status_code == 204:
+                print("✅ Webhook test SUCCESSFUL! Messages will appear in Discord.")
+            else:
+                print(f"⚠️ Webhook test returned status {test_response.status_code}")
+                print(f"   Response: {test_response.text[:200]}")
+        except Exception as e:
+            print(f"⚠️ Webhook test failed: {e}")
+        print("=" * 60)
+    
+    print("")
     
     app.run(host="0.0.0.0", port=8080, debug=False)
