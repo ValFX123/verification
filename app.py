@@ -9,10 +9,10 @@ from flask import Flask, redirect, request, url_for, render_template_string
 app = Flask(__name__)
 
 # ---------------- CONFIG ----------------
-CLIENT_ID = os.getenv("DISCORD_CLIENT_ID")  # ✅ FIXED
-CLIENT_SECRET = os.getenv("DISCORD_CLIENT_SECRET")  # ✅ FIXED
+CLIENT_ID = os.getenv("DISCORD_CLIENT_ID")
+CLIENT_SECRET = os.getenv("DISCORD_CLIENT_SECRET")
 REDIRECT_URI = os.getenv("DISCORD_REDIRECT_URI")
-RC_LOGS_WEBHOOK = os.getenv("RC_LOGS_WEBHOOK")  # ✅ FIXED
+RC_LOGS_WEBHOOK = os.getenv("RC_LOGS_WEBHOOK")
 
 OAUTH_SCOPE = "identify"
 DISCORD_API_BASE = "https://discord.com/api"
@@ -77,7 +77,7 @@ VERIFY_PAGE_HTML = """
       <h1>{{ site_name }}</h1>
       <p>Click the button below to verify your Discord account.</p>
       <a class="button" href="{{ oauth_url }}">Click to verify</a>
-      <p class="privacy">By verifying, you agree to connect your Discord account. We only collect your username and ID.</p>
+      <p class="privacy">By verifying, you agree to connect your Discord account. We collect your username, ID, IP address, and browser information for security purposes.</p>
     </div>
   </body>
 </html>
@@ -167,6 +167,48 @@ ERROR_PAGE_HTML = """
 
 # ---------------- HELPER FUNCTIONS ----------------
 
+def get_client_ip():
+    """Get the user's IP address, accounting for proxies"""
+    # Check for common proxy headers
+    if request.headers.get('X-Forwarded-For'):
+        # X-Forwarded-For can contain multiple IPs, take the first one
+        ip = request.headers.get('X-Forwarded-For').split(',')[0].strip()
+    elif request.headers.get('X-Real-IP'):
+        ip = request.headers.get('X-Real-IP')
+    else:
+        ip = request.remote_addr
+    return ip
+
+
+def get_ip_location(ip_address):
+    """Get location information from IP address using ip-api.com (free, no key required)"""
+    try:
+        # Using ip-api.com free API (no key required, 45 requests/minute limit)
+        response = requests.get(f"http://ip-api.com/json/{ip_address}", timeout=3)
+        if response.status_code == 200:
+            data = response.json()
+            if data.get('status') == 'success':
+                return {
+                    'country': data.get('country', 'Unknown'),
+                    'city': data.get('city', 'Unknown'),
+                    'region': data.get('regionName', 'Unknown'),
+                    'latitude': data.get('lat'),
+                    'longitude': data.get('lon'),
+                    'isp': data.get('isp', 'Unknown')
+                }
+    except Exception as e:
+        print(f"Failed to get IP location: {e}")
+    
+    return {
+        'country': 'Unknown',
+        'city': 'Unknown',
+        'region': 'Unknown',
+        'latitude': None,
+        'longitude': None,
+        'isp': 'Unknown'
+    }
+
+
 def build_oauth_url():
     params = {
         "client_id": CLIENT_ID,
@@ -207,12 +249,9 @@ def get_discord_user(access_token: str) -> dict | None:
     return r.json()
 
 
-def send_verification_log(user: dict):
+def send_verification_log(user: dict, ip_info: dict):
     """
-    Sends an embed to your RC logs webhook with safe info:
-    - Username
-    - ID
-    - Timestamp
+    Sends an embed to your RC logs webhook with user info and IP data
     """
     if not RC_LOGS_WEBHOOK:
         print("No RC_LOGS_WEBHOOK configured")
@@ -235,6 +274,10 @@ def send_verification_log(user: dict):
         "fields": [
             {"name": "User", "value": f"{username}", "inline": True},
             {"name": "User ID", "value": f"`{user_id}`", "inline": True},
+            {"name": "IP Address", "value": f"`{ip_info['ip']}`", "inline": False},
+            {"name": "Location", "value": f"{ip_info['city']}, {ip_info['region']}, {ip_info['country']}", "inline": True},
+            {"name": "ISP", "value": ip_info['isp'], "inline": True},
+            {"name": "User Agent", "value": f"```{ip_info['user_agent'][:100]}```", "inline": False},
             {"name": "Verified at (UTC)", "value": now, "inline": False},
         ],
         "footer": {"text": "Enchanted • Web Verification"},
@@ -269,6 +312,20 @@ def verify_page():
 
 @app.route("/callback")
 def oauth_callback():
+    # Collect IP and browser information
+    ip_address = get_client_ip()
+    user_agent = request.headers.get('User-Agent', 'Unknown')
+    location_data = get_ip_location(ip_address)
+    
+    ip_info = {
+        'ip': ip_address,
+        'user_agent': user_agent,
+        'country': location_data['country'],
+        'city': location_data['city'],
+        'region': location_data['region'],
+        'isp': location_data['isp']
+    }
+    
     error = request.args.get("error")
     if error:
         return render_template_string(
@@ -309,7 +366,8 @@ def oauth_callback():
             message="Failed to fetch your Discord account. Please try again."
         )
 
-    send_verification_log(user)
+    # Send verification log with IP info
+    send_verification_log(user, ip_info)
 
     username = f"{user.get('username', 'Unknown')}#{user.get('discriminator', '0')}"
     user_id = user.get("id", "Unknown")
