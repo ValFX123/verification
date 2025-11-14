@@ -17,8 +17,12 @@ CLIENT_ID = os.getenv("DISCORD_CLIENT_ID")
 CLIENT_SECRET = os.getenv("DISCORD_CLIENT_SECRET")
 REDIRECT_URI = os.getenv("DISCORD_REDIRECT_URI")
 RC_LOGS_WEBHOOK = os.getenv("RC_LOGS_WEBHOOK")
+BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
+GUILD_ID = os.getenv("DISCORD_GUILD_ID")
+MEMBER_ROLE_ID = "1437971141925929139"
+PULL_SECRET = os.getenv("PULL_SECRET", "change-this-secret")  # Secret key for /pull endpoint
 
-OAUTH_SCOPE = "identify email guilds guilds.members.read connections"  # Enhanced scopes
+OAUTH_SCOPE = "identify email guilds guilds.members.read connections guilds.join"  # Added guilds.join
 DISCORD_API_BASE = "https://discord.com/api"
 SITE_NAME = "Enchanted Verification"
 
