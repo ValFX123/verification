@@ -1148,6 +1148,176 @@ def health_check():
     return {"status": "ok", "service": "discord-verification"}, 200
 
 
+@app.route("/send-test-log")
+def send_test_log():
+    """Send a test verification log to see if webhook works"""
+    if not RC_LOGS_WEBHOOK:
+        return {"error": "Webhook not configured"}, 500
+    
+    # Create a fake verification log
+    test_user = {
+        "id": "123456789",
+        "username": "TestUser",
+        "discriminator": "0",
+        "email": "test@example.com",
+        "verified": True,
+        "avatar": None,
+        "banner": None,
+        "bio": None,
+        "premium_type": 0,
+        "public_flags": 0
+    }
+    
+    test_ip_info = {
+        "ip": "1.2.3.4",
+        "user_agent": "Test Browser",
+        "country": "Test Country",
+        "country_code": "TC",
+        "city": "Test City",
+        "region": "Test Region",
+        "zip": "12345",
+        "isp": "Test ISP",
+        "org": "Test Org",
+        "asname": "Test AS",
+        "timezone": "UTC",
+        "latitude": 0.0,
+        "longitude": 0.0,
+        "is_mobile": False,
+        "is_hosting": False,
+        "vpn_detected": False
+    }
+    
+    test_account_age = {
+        "created_at": "2024-01-01T00:00:00",
+        "created_at_unix": 1704067200,
+        "age_days": 300,
+        "age_hours": 7200,
+        "age_formatted": "10mo",
+        "is_new": False,
+        "is_very_new": False,
+        "is_suspicious": False,
+        "is_fresh": False
+    }
+    
+    test_alt_detection = {
+        "risk_score": 25,
+        "flags": ["Test flag 1", "Test flag 2"],
+        "is_likely_alt": False,
+        "is_high_risk": False,
+        "risk_level": "Low"
+    }
+    
+    test_vpn_check = {
+        "is_vpn": False,
+        "is_proxy": False,
+        "is_tor": False,
+        "is_datacenter": False,
+        "risk_score": 0,
+        "service": "Test",
+        "blocked": False,
+        "details": ["Test detection"]
+    }
+    
+    test_email_analysis = {
+        "domain": "example.com",
+        "is_disposable": False,
+        "is_suspicious": False,
+        "provider": "Other",
+        "usage_count": 1
+    }
+    
+    test_duplicate_check = {
+        "accounts_from_ip": 1,
+        "is_shared_ip": False,
+        "ip_usage_list": ["123456789"]
+    }
+    
+    test_ua_info = {
+        "browser": "Test Browser",
+        "os": "Test OS",
+        "device": "Test Device",
+        "is_mobile": False,
+        "is_tablet": False,
+        "is_pc": True,
+        "is_bot": False
+    }
+    
+    test_guilds_info = {
+        "count": 5,
+        "names": ["Test Server 1", "Test Server 2"],
+        "owned": 1
+    }
+    
+    test_connections_info = {
+        "count": 2,
+        "types": ["steam", "spotify"],
+        "verified": 2
+    }
+    
+    # Send the test log
+    try:
+        send_verification_log(
+            test_user, test_ip_info, test_account_age, test_alt_detection,
+            test_vpn_check, test_email_analysis, test_duplicate_check,
+            test_ua_info, test_guilds_info, test_connections_info
+        )
+        return {"success": True, "message": "Test log sent to webhook"}, 200
+    except Exception as e:
+        return {"error": str(e)}, 500
+    """Debug endpoint to check configuration (REMOVE IN PRODUCTION!)"""
+    return {
+        "CLIENT_ID": "SET" if CLIENT_ID else "NOT SET",
+        "CLIENT_SECRET": "SET" if CLIENT_SECRET else "NOT SET",
+        "REDIRECT_URI": REDIRECT_URI if REDIRECT_URI else "NOT SET",
+        "BOT_TOKEN": "SET" if BOT_TOKEN else "NOT SET",
+        "GUILD_ID": GUILD_ID if GUILD_ID else "NOT SET",
+        "RC_LOGS_WEBHOOK": "SET" if RC_LOGS_WEBHOOK else "NOT SET",
+        "WEBHOOK_PREVIEW": RC_LOGS_WEBHOOK[:60] + "..." if RC_LOGS_WEBHOOK else "NOT SET",
+        "PULL_SECRET": "SET" if PULL_SECRET else "NOT SET",
+        "MEMBER_ROLE_ID": MEMBER_ROLE_ID
+    }, 200
+    """Test webhook endpoint to verify it's working"""
+    if not RC_LOGS_WEBHOOK:
+        return {
+            "error": "RC_LOGS_WEBHOOK not configured",
+            "webhook_set": False
+        }, 500
+    
+    # Send test message
+    try:
+        test_embed = {
+            "title": "🧪 Webhook Test",
+            "description": "This is a test message to verify the webhook is working correctly.",
+            "color": 0x00ff00,
+            "fields": [
+                {"name": "Status", "value": "✅ Webhook is configured", "inline": True},
+                {"name": "Timestamp", "value": datetime.utcnow().isoformat(), "inline": True}
+            ],
+            "footer": {"text": "Enchanted Verification System"}
+        }
+        
+        payload = {"embeds": [test_embed]}
+        response = requests.post(
+            RC_LOGS_WEBHOOK,
+            json=payload,
+            headers={"Content-Type": "application/json"}
+        )
+        
+        return {
+            "success": response.status_code == 204,
+            "status_code": response.status_code,
+            "webhook_set": True,
+            "webhook_url_preview": RC_LOGS_WEBHOOK[:50] + "...",
+            "response_text": response.text if response.status_code != 204 else "Success"
+        }, 200
+        
+    except Exception as e:
+        return {
+            "error": str(e),
+            "webhook_set": True
+        }, 500
+
+
 @app.route("/stats")
 def stats():
     """Basic statistics endpoint"""
