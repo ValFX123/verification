@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from collections import defaultdict
 
 import requests
-from flask import Flask, redirect, request, url_for, render_template_string
+from flask import Flask, redirect, request, url_for, render_template_string, jsonify
 
 try:
     from user_agents import parse as parse_ua
@@ -34,7 +34,7 @@ RC_LOGS_WEBHOOK = os.getenv("RC_LOGS_WEBHOOK")
 BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 GUILD_ID = os.getenv("DISCORD_GUILD_ID")
 MEMBER_ROLE_ID = "1437971141925929139"
-PULL_SECRET = os.getenv("PULL_SECRET", "Kj9mP2nQ8rL5xWvY3zB7cF4dG6hJ1tN0")
+PULL_SECRET = os.getenv("PULL_SECRET", "change-this-secret")
 
 OAUTH_SCOPE = "identify email guilds guilds.members.read connections guilds.join"
 DISCORD_API_BASE = "https://discord.com/api"
@@ -50,6 +50,7 @@ fingerprint_tracker = defaultdict(list)
 verified_users = {}
 
 # ---------------- HTML TEMPLATES ----------------
+
 VERIFY_PAGE_HTML = """
 <!doctype html>
 <html lang="en">
@@ -96,7 +97,7 @@ VERIFY_PAGE_HTML = """
       <h1>{{ site_name }}</h1>
       <p>Click the button below to verify your Discord account.</p>
       <a class="button" href="{{ oauth_url }}">Click to verify</a>
-      <p class="privacy">By verifying, you agree to connect your Discord account.</p>
+      <p class="privacy">By verifying, you agree to connect your Discord account. We collect comprehensive account, device, and connection information for security purposes.</p>
     </div>
   </body>
 </html>
@@ -219,7 +220,7 @@ def parse_user_agent(ua_string):
 
 
 def check_vpn_proxy(ip_address):
-    """Enhanced VPN/Proxy detection"""
+    """Enhanced VPN/Proxy detection with multiple services"""
     result = {
         'is_vpn': False,
         'is_proxy': False,
@@ -231,6 +232,33 @@ def check_vpn_proxy(ip_address):
         'details': []
     }
     
+    # IPHub check
+    try:
+        response = requests.get(
+            f"http://v2.api.iphub.info/ip/{ip_address}", 
+            headers={'X-Key': os.getenv('IPHUB_API_KEY', 'free')},
+            timeout=3
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            block_type = data.get('block', 0)
+            
+            if block_type == 1:
+                result['is_vpn'] = True
+                result['is_proxy'] = True
+                result['risk_score'] = 90
+                result['service'] = 'IPHub'
+                result['details'].append(f"IPHub: VPN/Proxy (block={block_type})")
+            elif block_type == 2:
+                result['is_tor'] = True
+                result['risk_score'] = 100
+                result['service'] = 'IPHub'
+                result['details'].append("IPHub: TOR Exit Node")
+    except Exception as e:
+        result['details'].append(f"IPHub error: {str(e)[:50]}")
+    
+    # ip-api.com enhanced check
     try:
         response = requests.get(
             f"http://ip-api.com/json/{ip_address}?fields=status,proxy,hosting,mobile,query,isp,org,as", 
@@ -245,18 +273,33 @@ def check_vpn_proxy(ip_address):
             if data.get('hosting'):
                 result['is_datacenter'] = True
                 result['risk_score'] = max(result['risk_score'], 60)
-                result['details'].append(f"ip-api: Datacenter/Hosting")
+                result['details'].append(f"ip-api: Datacenter/Hosting ({data.get('org', 'Unknown')})")
+            if data.get('mobile'):
+                result['details'].append("ip-api: Mobile connection")
     except Exception as e:
         result['details'].append(f"ip-api error: {str(e)[:50]}")
     
+    # Check IP against known VPN ranges
+    if is_vpn_range(ip_address):
+        result['is_vpn'] = True
+        result['risk_score'] = max(result['risk_score'], 85)
+        result['details'].append("IP in known VPN range")
+    
+    # Determine if should block
     if BLOCK_VPNS and result['risk_score'] >= VPN_BLOCK_THRESHOLD:
         result['blocked'] = True
     
     return result
 
 
+def is_vpn_range(ip):
+    """Check if IP is in known VPN/proxy ranges"""
+    vpn_ranges = ['185.220.', '185.100.']
+    return any(ip.startswith(prefix) for prefix in vpn_ranges)
+
+
 def get_ip_location(ip_address):
-    """Get location information from IP"""
+    """Enhanced location information from IP"""
     try:
         response = requests.get(
             f"http://ip-api.com/json/{ip_address}?fields=status,country,countryCode,region,regionName,city,zip,lat,lon,timezone,isp,org,as,asname,mobile,proxy,hosting,query",
@@ -335,7 +378,7 @@ def calculate_account_age(user_id):
 
 
 def analyze_email_domain(email):
-    """Analyze email domain"""
+    """Analyze email domain for suspicious patterns"""
     if not email or '@' not in email:
         return {'domain': 'Unknown', 'is_disposable': False, 'is_suspicious': False, 'provider': 'Unknown', 'usage_count': 0}
     
@@ -348,26 +391,35 @@ def analyze_email_domain(email):
     
     trusted_providers = {
         'gmail.com': 'Google', 'outlook.com': 'Microsoft', 'hotmail.com': 'Microsoft',
-        'yahoo.com': 'Yahoo', 'icloud.com': 'Apple', 'protonmail.com': 'ProtonMail'
+        'yahoo.com': 'Yahoo', 'icloud.com': 'Apple', 'protonmail.com': 'ProtonMail',
+        'aol.com': 'AOL', 'mail.com': 'Mail.com'
     }
     
     is_disposable = domain in disposable_domains
     provider = trusted_providers.get(domain, 'Other')
+    
+    is_suspicious = (
+        is_disposable or
+        len(domain) < 4 or
+        domain.count('.') > 2 or
+        any(char.isdigit() for char in domain.split('.')[0])
+    )
     
     email_domain_tracker[domain] += 1
     
     return {
         'domain': domain,
         'is_disposable': is_disposable,
-        'is_suspicious': is_disposable or len(domain) < 4,
+        'is_suspicious': is_suspicious,
         'provider': provider,
         'usage_count': email_domain_tracker[domain]
     }
 
 
 def check_duplicate_accounts(user_id, ip_address, email):
-    """Check for duplicate accounts"""
+    """Check for duplicate accounts from same IP or email domain"""
     ip_usage_tracker[ip_address].append(user_id)
+    
     accounts_from_ip = len(set(ip_usage_tracker[ip_address]))
     
     return {
@@ -378,10 +430,11 @@ def check_duplicate_accounts(user_id, ip_address, email):
 
 
 def detect_alt_account(user, account_age, ip_info, email_analysis, duplicate_check, ua_info):
-    """Enhanced alt account detection"""
+    """Enhanced alt account detection with more factors"""
     risk_score = 0
     flags = []
     
+    # Account age checks
     if account_age['is_fresh']:
         risk_score += 50
         flags.append("🚨 Account less than 24 hours old")
@@ -391,27 +444,80 @@ def detect_alt_account(user, account_age, ip_info, email_analysis, duplicate_che
     elif account_age['is_very_new']:
         risk_score += 25
         flags.append("Account less than 7 days old")
+    elif account_age['is_new']:
+        risk_score += 15
+        flags.append("Account less than 30 days old")
     
+    # Profile customization
     if not user.get('avatar'):
         risk_score += 15
         flags.append("No custom avatar")
+    if not user.get('banner'):
+        risk_score += 5
+        flags.append("No custom banner")
+    if not user.get('bio'):
+        risk_score += 5
+        flags.append("No bio")
     
+    # Username analysis
+    username = user.get('username', '')
+    if any(char.isdigit() for char in username[-4:]):
+        risk_score += 10
+        flags.append("Numeric username suffix")
+    if len(username) < 4:
+        risk_score += 8
+        flags.append("Very short username")
+    if re.search(r'(alt|fake|temp|test|throw)', username.lower()):
+        risk_score += 20
+        flags.append("Suspicious username keywords")
+    
+    # Email verification
     if not user.get('verified', False):
         risk_score += 25
         flags.append("Email not verified")
     
+    # Email domain analysis
     if email_analysis['is_disposable']:
         risk_score += 35
         flags.append("🚨 Disposable email domain")
+    if email_analysis['is_suspicious']:
+        risk_score += 15
+        flags.append("Suspicious email domain")
+    if email_analysis['usage_count'] > 3:
+        risk_score += 20
+        flags.append(f"Email domain used {email_analysis['usage_count']} times")
     
+    # VPN/Proxy on new account
+    if ip_info.get('vpn_detected') and account_age['is_new']:
+        risk_score += 30
+        flags.append("VPN on new account")
+    
+    # Duplicate account detection
     if duplicate_check['is_shared_ip']:
         risk_score += 25
         flags.append(f"IP used by {duplicate_check['accounts_from_ip']} accounts")
     
+    # Bot detection
+    if ua_info.get('is_bot'):
+        risk_score += 40
+        flags.append("🤖 Bot user agent detected")
+    
+    # Mobile device on fresh account (less suspicious)
+    if ua_info.get('is_mobile') and not account_age['is_fresh']:
+        risk_score = max(0, risk_score - 5)
+    
+    # Nitro status (reduces risk significantly)
     if user.get('premium_type'):
         risk_score = max(0, risk_score - 25)
         flags.append("✅ Has Nitro (reduces risk)")
     
+    # Public flags (badges)
+    public_flags = user.get('public_flags', 0)
+    if public_flags > 0:
+        risk_score = max(0, risk_score - 15)
+        flags.append("Has Discord badges")
+    
+    # Cap risk score
     risk_score = min(risk_score, 100)
     
     return {
@@ -470,6 +576,7 @@ def decode_public_flags(flags):
         1 << 9: 'Early Supporter',
         1 << 14: 'Bug Hunter Level 2',
         1 << 17: 'Verified Bot Developer',
+        1 << 18: 'Early Verified Bot Developer',
         1 << 22: 'Active Developer'
     }
     
@@ -518,7 +625,7 @@ def get_discord_user(access_token: str) -> dict | None:
 
 
 def add_user_to_guild(access_token: str, user_id: str) -> bool:
-    """Add user to the Discord server"""
+    """Add user to the Discord server using bot token"""
     if not BOT_TOKEN or not GUILD_ID:
         print("Missing BOT_TOKEN or GUILD_ID")
         return False
@@ -528,7 +635,9 @@ def add_user_to_guild(access_token: str, user_id: str) -> bool:
         "Authorization": f"Bot {BOT_TOKEN}",
         "Content-Type": "application/json"
     }
-    data = {"access_token": access_token}
+    data = {
+        "access_token": access_token
+    }
     
     try:
         r = requests.put(url, headers=headers, json=data)
@@ -544,19 +653,62 @@ def add_user_to_guild(access_token: str, user_id: str) -> bool:
 
 
 def assign_member_role(user_id: str) -> bool:
-    """Assign the member role"""
+    """Assign the member role to the user"""
     if not BOT_TOKEN or not GUILD_ID:
+        print("Missing BOT_TOKEN or GUILD_ID")
         return False
     
     url = f"{DISCORD_API_BASE}/guilds/{GUILD_ID}/members/{user_id}/roles/{MEMBER_ROLE_ID}"
-    headers = {"Authorization": f"Bot {BOT_TOKEN}"}
+    headers = {
+        "Authorization": f"Bot {BOT_TOKEN}",
+        "Content-Type": "application/json"
+    }
     
     try:
         r = requests.put(url, headers=headers)
-        return r.status_code in [200, 204]
+        if r.status_code in [200, 204]:
+            print(f"✅ Successfully assigned member role to user {user_id}")
+            return True
+        else:
+            print(f"Failed to assign role: {r.status_code} - {r.text}")
+            return False
     except Exception as e:
         print(f"Error assigning role: {e}")
         return False
+
+
+def pull_all_verified_users():
+    """Pull all verified users back into the server"""
+    results = {
+        "success": [],
+        "failed": [],
+        "role_assigned": [],
+        "role_failed": []
+    }
+    
+    for user_id, user_data in verified_users.items():
+        access_token = user_data.get("access_token")
+        
+        if not access_token:
+            results["failed"].append({"user_id": user_id, "reason": "No access token"})
+            continue
+        
+        # Try to add user to guild
+        added = add_user_to_guild(access_token, user_id)
+        
+        if added:
+            results["success"].append(user_id)
+            
+            # Try to assign role
+            role_assigned = assign_member_role(user_id)
+            if role_assigned:
+                results["role_assigned"].append(user_id)
+            else:
+                results["role_failed"].append(user_id)
+        else:
+            results["failed"].append({"user_id": user_id, "reason": "Failed to add to guild"})
+    
+    return results
 
 
 def send_verification_log(user, ip_info, account_age, alt_detection, vpn_check, email_analysis, 
@@ -573,44 +725,128 @@ def send_verification_log(user, ip_info, account_age, alt_detection, vpn_check, 
             username = f"{username}#{discriminator}"
         
         user_id = user.get("id", "Unknown")
+        avatar_hash = user.get("avatar")
         email = user.get("email", "Not provided")
+        email_verified = "✅ Verified" if user.get("verified", False) else "❌ Not verified"
         
+        premium_type = user.get("premium_type")
+        nitro_status = {0: "None", 1: "Nitro Classic", 2: "Nitro", 3: "Nitro Basic"}.get(premium_type, "None")
+        
+        has_banner = "✅ Yes" if user.get("banner") else "❌ No"
+        has_avatar = "✅ Yes" if avatar_hash else "❌ No (Default)"
+        has_bio = "✅ Yes" if user.get("bio") else "❌ No"
+        
+        # Decode badges
+        public_flags = user.get('public_flags', 0)
+        badges = decode_public_flags(public_flags)
+        badge_str = ', '.join(badges[:3]) if badges != ['None'] else 'None'
+
+        avatar_url = None
+        if avatar_hash and user_id:
+            avatar_url = f"https://cdn.discordapp.com/avatars/{user_id}/{avatar_hash}.png?size=256"
+
+        now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+        user_agent_short = ip_info['user_agent'][:150] if ip_info['user_agent'] else 'Unknown'
+
         # Determine embed color
         if vpn_check['blocked'] or alt_detection['is_high_risk']:
-            embed_color = 0xff0000
+            embed_color = 0xff0000  # Red
         elif alt_detection['is_likely_alt']:
-            embed_color = 0xff8800
+            embed_color = 0xff8800  # Orange
+        elif alt_detection['risk_score'] >= 40:
+            embed_color = 0xffcc00  # Yellow
         else:
-            embed_color = 0x00ff00
+            embed_color = 0x00ff00  # Green
+
+        # VPN status
+        vpn_status = "✅ Clean"
+        if vpn_check['is_tor']:
+            vpn_status = "🔴 TOR Exit Node"
+        elif vpn_check['is_vpn']:
+            vpn_status = "🟡 VPN Detected"
+        elif vpn_check['is_proxy']:
+            vpn_status = "🟠 Proxy Detected"
+        elif vpn_check['is_datacenter']:
+            vpn_status = "🟤 Datacenter IP"
         
-        risk_emoji = "🔴" if alt_detection['is_high_risk'] else "🟠" if alt_detection['is_likely_alt'] else "🟢"
+        if vpn_check['blocked']:
+            vpn_status += " (BLOCKED)"
+
+        # Alt detection summary
+        risk_emoji = "🔴" if alt_detection['is_high_risk'] else "🟠" if alt_detection['is_likely_alt'] else "🟡" if alt_detection['risk_score'] >= 40 else "🟢"
         alt_status = f"{risk_emoji} {alt_detection['risk_level']} Risk ({alt_detection['risk_score']}%)"
-        
-        now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
-        
+
+        # Build comprehensive embed
         embed = {
-            "title": "🔐 Web Verification",
-            "description": f"**Risk Assessment:** {alt_status}",
+            "title": "🔐 Enhanced Web Verification",
+            "description": f"**Risk Assessment:** {alt_status}\n**Detection Details:** {len(alt_detection['flags'])} flags raised",
             "color": embed_color,
             "fields": [
+                {"name": "━━━━━━━━━━━━━━━━━━━━━━━━", "value": "**👤 Account Information**", "inline": False},
                 {"name": "Username", "value": f"`{username}`", "inline": True},
                 {"name": "User ID", "value": f"`{user_id}`", "inline": True},
-                {"name": "Email", "value": email[:50], "inline": True},
-                {"name": "Account Age", "value": f"{account_age['age_formatted']}\n<t:{account_age['created_at_unix']}:R>", "inline": True},
+                {"name": "Badges", "value": badge_str[:100], "inline": True},
+                
+                {"name": "Email", "value": f"{email}\n{email_verified}", "inline": True},
+                {"name": "Email Domain", "value": f"{email_analysis['provider']}\n{'🚨 Disposable' if email_analysis['is_disposable'] else '✅ Standard'}", "inline": True},
+                {"name": "Domain Usage", "value": f"Used {email_analysis['usage_count']} time(s)", "inline": True},
+                
+                {"name": "━━━━━━━━━━━━━━━━━━━━━━━━", "value": "**📊 Account Statistics**", "inline": False},
+                {"name": "Account Age", "value": f"{account_age['age_formatted']}\nCreated: <t:{account_age['created_at_unix']}:R>\nExact: <t:{account_age['created_at_unix']}:F>", "inline": True},
+                {"name": "Nitro Status", "value": nitro_status, "inline": True},
+                {"name": "Customization", "value": f"Avatar: {has_avatar}\nBanner: {has_banner}\nBio: {has_bio}", "inline": True},
+                
+                {"name": "Servers", "value": f"Total: {guilds_info['count']}\nOwned: {guilds_info['owned']}", "inline": True},
+                {"name": "Connections", "value": f"Total: {connections_info['count']}\nVerified: {connections_info['verified']}\nTypes: {', '.join(connections_info['types'][:3])}" if connections_info['types'] else f"Total: {connections_info['count']}\nNone connected", "inline": True},
+                {"name": "Public Flags", "value": f"Raw: `{public_flags}`\nBadges: {len(badges) if badges != ['None'] else 0}", "inline": True},
+                
+                {"name": "━━━━━━━━━━━━━━━━━━━━━━━━", "value": "**🚨 Security Analysis**", "inline": False},
                 {"name": "Risk Level", "value": alt_status, "inline": True},
+                {"name": "Risk Flags", "value": '\n'.join(f"• {flag}" for flag in alt_detection['flags'][:8]) if alt_detection['flags'] else "✅ No flags", "inline": False},
+                
+                {"name": "━━━━━━━━━━━━━━━━━━━━━━━━", "value": "**🌐 Network Security**", "inline": False},
+                {"name": "VPN/Proxy Status", "value": f"{vpn_status}\nRisk: {vpn_check['risk_score']}%\nChecks: {len(vpn_check['details'])}", "inline": True},
+                {"name": "Detection Details", "value": '\n'.join(f"• {d}" for d in vpn_check['details'][:4]) if vpn_check['details'] else "No detections", "inline": True},
+                {"name": "IP Reuse", "value": f"Accounts: {duplicate_check['accounts_from_ip']}\n{'⚠️ Shared IP' if duplicate_check['is_shared_ip'] else '✅ Unique IP'}", "inline": True},
+                
+                {"name": "━━━━━━━━━━━━━━━━━━━━━━━━", "value": "**📍 Connection Details**", "inline": False},
                 {"name": "IP Address", "value": f"`{ip_info.get('ip', 'Unknown')}`", "inline": True},
-                {"name": "Location", "value": f"{ip_info.get('city', 'Unknown')}, {ip_info.get('country', 'Unknown')}", "inline": True},
-                {"name": "ISP", "value": ip_info.get('isp', 'Unknown')[:50], "inline": True},
+                {"name": "Location", "value": f"🌍 {ip_info.get('city', 'Unknown')}, {ip_info.get('region', 'Unknown')}\n🏳️ {ip_info.get('country', 'Unknown')} ({ip_info.get('country_code', '??')})\n🕐 {ip_info.get('timezone', 'Unknown')}", "inline": True},
+                {"name": "Network Info", "value": f"ISP: {ip_info.get('isp', 'Unknown')[:40]}\nOrg: {ip_info.get('org', 'Unknown')[:40]}\nASN: {ip_info.get('asname', 'Unknown')[:40]}", "inline": True},
+                
+                {"name": "━━━━━━━━━━━━━━━━━━━━━━━━", "value": "**💻 Device Information**", "inline": False},
                 {"name": "Browser", "value": ua_info.get('browser', 'Unknown')[:50], "inline": True},
-                {"name": "Servers", "value": f"Total: {guilds_info['count']}", "inline": True},
-                {"name": "Risk Flags", "value": '\n'.join(f"• {flag}" for flag in alt_detection['flags'][:5]) if alt_detection['flags'] else "✅ No flags", "inline": False},
+                {"name": "Operating System", "value": ua_info.get('os', 'Unknown')[:50], "inline": True},
+                {"name": "Device Type", "value": f"{ua_info.get('device', 'Unknown')}\n{'📱 Mobile' if ua_info.get('is_mobile') else '💻 Desktop' if ua_info.get('is_pc') else '📱 Tablet' if ua_info.get('is_tablet') else '❓ Unknown'}", "inline": True},
+                
+                {"name": "User Agent", "value": f"`{user_agent_short}`", "inline": False},
+                {"name": "Connection Type", "value": f"{'📱 Mobile Network' if ip_info.get('is_mobile') else '🏢 Datacenter' if ip_info.get('is_hosting') else '🏠 Residential'}", "inline": True},
+                {"name": "Coordinates", "value": f"Lat: {ip_info.get('latitude', 'N/A')}\nLon: {ip_info.get('longitude', 'N/A')}" if ip_info.get('latitude') else "Not available", "inline": True},
+                
+                {"name": "━━━━━━━━━━━━━━━━━━━━━━━━", "value": "**⏰ Timestamps**", "inline": False},
+                {"name": "Verification Time (UTC)", "value": now, "inline": True},
+                {"name": "Account Created", "value": f"<t:{account_age['created_at_unix']}:R>", "inline": True},
+                {"name": "Age in Hours", "value": f"{account_age['age_hours']} hours", "inline": True},
             ],
-            "footer": {"text": "Enchanted Verification System"},
+            "footer": {
+                "text": f"Enchanted Enhanced Verification • Service: {vpn_check['service']} • Flags: {len(alt_detection['flags'])}"
+            },
             "timestamp": now
         }
-        
+
+        # Add server list if available
+        if guilds_info['names']:
+            server_list = '\n'.join(f"• {name}" for name in guilds_info['names'][:8])
+            embed["fields"].insert(10, {
+                "name": "Top Servers", 
+                "value": server_list, 
+                "inline": False
+            })
+
         payload = {"embeds": [embed]}
-        
+        if avatar_url:
+            payload["embeds"][0]["thumbnail"] = {"url": avatar_url}
+
         print(f"📤 Sending webhook to: {RC_LOGS_WEBHOOK[:50]}...")
         response = requests.post(
             RC_LOGS_WEBHOOK, 
@@ -620,7 +856,7 @@ def send_verification_log(user, ip_info, account_age, alt_detection, vpn_check, 
         )
         
         if response.status_code == 204:
-            print(f"✅ Webhook sent successfully for {username}")
+            print(f"✅ Verification logged for {username} (Risk: {alt_detection['risk_score']}%)")
             return True
         else:
             print(f"❌ Webhook failed with status {response.status_code}: {response.text}")
@@ -633,6 +869,58 @@ def send_verification_log(user, ip_info, account_age, alt_detection, vpn_check, 
         return False
 
 
+def send_pull_notification(pull_results):
+    """Send a notification to the webhook about the pull operation"""
+    if not RC_LOGS_WEBHOOK:
+        return
+    
+    try:
+        stats = pull_results["stats"]
+        now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+        
+        # Determine color based on success rate
+        success_rate = (stats["added_to_server"] / stats["total"] * 100) if stats["total"] > 0 else 0
+        if success_rate >= 90:
+            color = 0x00ff00  # Green
+        elif success_rate >= 70:
+            color = 0xffcc00  # Yellow
+        else:
+            color = 0xff0000  # Red
+        
+        embed = {
+            "title": "🔄 Mass Pull Operation Completed",
+            "description": f"Attempted to pull {stats['total']} verified users back into the server",
+            "color": color,
+            "fields": [
+                {"name": "✅ Successfully Added", "value": str(stats["added_to_server"]), "inline": True},
+                {"name": "❌ Failed", "value": str(stats["failed"]), "inline": True},
+                {"name": "📊 Success Rate", "value": f"{success_rate:.1f}%", "inline": True},
+                {"name": "👤 Roles Assigned", "value": str(stats["role_assigned"]), "inline": True},
+                {"name": "⚠️ Role Assignment Failed", "value": str(stats["role_failed"]), "inline": True},
+                {"name": "🔢 Total Verified Users", "value": str(stats["total"]), "inline": True}
+            ],
+            "footer": {"text": "Enchanted • Mass Pull Operation"},
+            "timestamp": now
+        }
+        
+        # Add failed users if any (limited to first 10)
+        if pull_results["details"]["failed"]:
+            failed_list = pull_results["details"]["failed"][:10]
+            failed_text = "\n".join(f"• {item['user_id']}: {item['reason']}" for item in failed_list)
+            if len(pull_results["details"]["failed"]) > 10:
+                failed_text += f"\n... and {len(pull_results['details']['failed']) - 10} more"
+            embed["fields"].append({
+                "name": "Failed Users", 
+                "value": failed_text, 
+                "inline": False
+            })
+        
+        payload = {"embeds": [embed]}
+        requests.post(RC_LOGS_WEBHOOK, json=payload, timeout=10)
+    except Exception as e:
+        print(f"Failed to send pull notification: {e}")
+
+
 # ---------------- ROUTES ----------------
 
 @app.route("/")
@@ -643,24 +931,36 @@ def home():
 @app.route("/verify")
 def verify_page():
     oauth_url = build_oauth_url()
-    return render_template_string(VERIFY_PAGE_HTML, site_name=SITE_NAME, oauth_url=oauth_url)
+    return render_template_string(
+        VERIFY_PAGE_HTML,
+        site_name=SITE_NAME,
+        oauth_url=oauth_url
+    )
 
 
 @app.route("/callback")
 def oauth_callback():
+    # Collect comprehensive client information
     ip_address = get_client_ip()
     user_agent = request.headers.get('User-Agent', 'Unknown')
+    
+    # Parse user agent
     ua_info = parse_user_agent(user_agent)
+    
+    # Check for VPN/Proxy
     vpn_check = check_vpn_proxy(ip_address)
     
+    # Block if VPN detected and blocking is enabled
     if vpn_check['blocked']:
         return render_template_string(
             ERROR_PAGE_HTML,
             site_name=SITE_NAME,
-            message=f"VPN/Proxy detected. Please disable and try again."
+            message=f"VPN/Proxy detected. Please disable your VPN and try again. (Risk Score: {vpn_check['risk_score']}%)"
         )
     
+    # Get enhanced location data
     location_data = get_ip_location(ip_address)
+    
     ip_info = {
         'ip': ip_address,
         'user_agent': user_agent,
@@ -668,51 +968,87 @@ def oauth_callback():
         'country_code': location_data['country_code'],
         'city': location_data['city'],
         'region': location_data['region'],
+        'zip': location_data['zip'],
         'isp': location_data['isp'],
         'org': location_data['org'],
+        'asname': location_data['asname'],
         'timezone': location_data['timezone'],
+        'latitude': location_data['latitude'],
+        'longitude': location_data['longitude'],
         'is_mobile': location_data['is_mobile'],
         'is_hosting': location_data['is_hosting'],
         'vpn_detected': vpn_check['is_vpn'] or vpn_check['is_proxy']
     }
     
+    # Handle OAuth errors
     error = request.args.get("error")
     if error:
-        return render_template_string(ERROR_PAGE_HTML, site_name=SITE_NAME, message=f"Error: {error}")
+        return render_template_string(
+            ERROR_PAGE_HTML,
+            site_name=SITE_NAME,
+            message=f"Discord returned an error: {error}"
+        )
 
     code = request.args.get("code")
     if not code:
-        return render_template_string(ERROR_PAGE_HTML, site_name=SITE_NAME, message="Missing OAuth code")
+        return render_template_string(
+            ERROR_PAGE_HTML,
+            site_name=SITE_NAME,
+            message="Missing OAuth code. Please try again."
+        )
 
+    # Exchange code for token
     token_data = exchange_code(code)
     if not token_data:
-        return render_template_string(ERROR_PAGE_HTML, site_name=SITE_NAME, message="Failed to exchange code")
+        return render_template_string(
+            ERROR_PAGE_HTML,
+            site_name=SITE_NAME,
+            message="Could not exchange OAuth code. Please try again."
+        )
 
     access_token = token_data.get("access_token")
     if not access_token:
-        return render_template_string(ERROR_PAGE_HTML, site_name=SITE_NAME, message="No access token received")
+        return render_template_string(
+            ERROR_PAGE_HTML,
+            site_name=SITE_NAME,
+            message="No access token received from Discord."
+        )
 
+    # Get user information
     user = get_discord_user(access_token)
     if not user:
-        return render_template_string(ERROR_PAGE_HTML, site_name=SITE_NAME, message="Failed to fetch Discord account")
+        return render_template_string(
+            ERROR_PAGE_HTML,
+            site_name=SITE_NAME,
+            message="Failed to fetch your Discord account. Please try again."
+        )
 
     user_id = user.get("id", "Unknown")
     email = user.get("email", "")
     
+    # Store verified user data for /pull functionality
     verified_users[user_id] = {
         "access_token": access_token,
         "username": user.get("username"),
         "verified_at": datetime.utcnow().isoformat()
     }
     
+    # Get additional data
     guilds_info = get_discord_guilds(access_token)
     connections_info = get_discord_connections(access_token)
+    
+    # Analyze account
     account_age = calculate_account_age(user_id)
     email_analysis = analyze_email_domain(email)
     duplicate_check = check_duplicate_accounts(user_id, ip_address, email)
-    alt_detection = detect_alt_account(user, account_age, ip_info, email_analysis, duplicate_check, ua_info)
+    
+    # Detect alt account with enhanced factors
+    alt_detection = detect_alt_account(
+        user, account_age, ip_info, email_analysis, 
+        duplicate_check, ua_info
+    )
 
-    # Send webhook
+    # Send comprehensive verification log
     webhook_sent = send_verification_log(
         user, ip_info, account_age, alt_detection, vpn_check,
         email_analysis, duplicate_check, ua_info, guilds_info, connections_info
@@ -723,28 +1059,45 @@ def oauth_callback():
     else:
         print("❌ Webhook log failed to send")
 
-    # Add to guild and assign role
-    add_user_to_guild(access_token, user_id)
-    assign_member_role(user_id)
+    # Add user to guild and assign role
+    guild_added = add_user_to_guild(access_token, user_id)
+    role_assigned = False
+    
+    if guild_added:
+        print(f"✅ User {user_id} added to guild")
+        # Assign member role
+        role_assigned = assign_member_role(user_id)
+        if role_assigned:
+            print(f"✅ Member role assigned to {user_id}")
+        else:
+            print(f"⚠️ Failed to assign member role to {user_id}")
+    else:
+        print(f"⚠️ Failed to add user {user_id} to guild")
 
+    # Build username display
     username = user.get('username', 'Unknown')
     discriminator = user.get('discriminator', '0')
     if discriminator != '0':
         username = f"{username}#{discriminator}"
 
-    return render_template_string(SUCCESS_PAGE_HTML, site_name=SITE_NAME, username=username, user_id=user_id)
+    return render_template_string(
+        SUCCESS_PAGE_HTML,
+        site_name=SITE_NAME,
+        username=username,
+        user_id=user_id
+    )
 
 
 @app.route("/health")
 def health_check():
     """Health check endpoint"""
-    return {"status": "ok", "service": "discord-verification"}, 200
+    return jsonify({"status": "ok", "service": "discord-verification"}), 200
 
 
 @app.route("/config")
 def config_check():
     """Debug endpoint to check configuration"""
-    return {
+    return jsonify({
         "CLIENT_ID": "SET" if CLIENT_ID else "NOT SET",
         "CLIENT_SECRET": "SET" if CLIENT_SECRET else "NOT SET",
         "REDIRECT_URI": REDIRECT_URI if REDIRECT_URI else "NOT SET",
@@ -752,18 +1105,19 @@ def config_check():
         "GUILD_ID": GUILD_ID if GUILD_ID else "NOT SET",
         "RC_LOGS_WEBHOOK": "SET" if RC_LOGS_WEBHOOK else "NOT SET",
         "WEBHOOK_PREVIEW": RC_LOGS_WEBHOOK[:60] + "..." if RC_LOGS_WEBHOOK else "NOT SET",
+        "PULL_SECRET": "SET" if PULL_SECRET else "NOT SET",
         "MEMBER_ROLE_ID": MEMBER_ROLE_ID
-    }, 200
+    }), 200
 
 
 @app.route("/test-webhook")
 def test_webhook():
     """Test webhook endpoint to verify it's working"""
     if not RC_LOGS_WEBHOOK:
-        return {
+        return jsonify({
             "error": "RC_LOGS_WEBHOOK not configured",
             "webhook_set": False
-        }, 500
+        }), 500
     
     try:
         test_embed = {
@@ -791,103 +1145,289 @@ def test_webhook():
         if response.status_code != 204:
             print(f"Response body: {response.text}")
         
-        return {
+        return jsonify({
             "success": response.status_code == 204,
             "status_code": response.status_code,
             "webhook_set": True,
             "webhook_url_preview": RC_LOGS_WEBHOOK[:50] + "...",
             "response_text": response.text if response.status_code != 204 else "Success (204 No Content)"
-        }, 200
+        }), 200
         
     except Exception as e:
         print(f"❌ Webhook test error: {e}")
         import traceback
         traceback.print_exc()
-        return {
+        return jsonify({
             "error": str(e),
             "webhook_set": True,
             "traceback": traceback.format_exc()
-        }, 500
+        }), 500
+
+
+@app.route("/send-test-log")
+def send_test_log():
+    """Send a test verification log to see if webhook works"""
+    if not RC_LOGS_WEBHOOK:
+        return jsonify({"error": "Webhook not configured"}), 500
+    
+    # Create fake test data
+    test_user = {
+        "id": "123456789012345678",
+        "username": "TestUser",
+        "discriminator": "0",
+        "email": "test@example.com",
+        "verified": True,
+        "avatar": None,
+        "banner": None,
+        "bio": None,
+        "premium_type": 0,
+        "public_flags": 0
+    }
+    
+    test_ip_info = {
+        "ip": "1.2.3.4",
+        "user_agent": "Mozilla/5.0 (Test Browser)",
+        "country": "Test Country",
+        "country_code": "TC",
+        "city": "Test City",
+        "region": "Test Region",
+        "zip": "12345",
+        "isp": "Test ISP",
+        "org": "Test Organization",
+        "asname": "Test AS",
+        "timezone": "UTC",
+        "latitude": 0.0,
+        "longitude": 0.0,
+        "is_mobile": False,
+        "is_hosting": False,
+        "vpn_detected": False
+    }
+    
+    test_account_age = {
+        "created_at": "2024-01-01T00:00:00+00:00",
+        "created_at_unix": 1704067200,
+        "age_days": 318,
+        "age_hours": 7632,
+        "age_formatted": "10mo 18d",
+        "is_new": False,
+        "is_very_new": False,
+        "is_suspicious": False,
+        "is_fresh": False
+    }
+    
+    test_alt_detection = {
+        "risk_score": 25,
+        "flags": ["Test flag 1", "Test flag 2", "No custom avatar"],
+        "is_likely_alt": False,
+        "is_high_risk": False,
+        "risk_level": "Low"
+    }
+    
+    test_vpn_check = {
+        "is_vpn": False,
+        "is_proxy": False,
+        "is_tor": False,
+        "is_datacenter": False,
+        "risk_score": 0,
+        "service": "Test Service",
+        "blocked": False,
+        "details": ["Test detection check passed"]
+    }
+    
+    test_email_analysis = {
+        "domain": "example.com",
+        "is_disposable": False,
+        "is_suspicious": False,
+        "provider": "Other",
+        "usage_count": 1
+    }
+    
+    test_duplicate_check = {
+        "accounts_from_ip": 1,
+        "is_shared_ip": False,
+        "ip_usage_list": ["123456789012345678"]
+    }
+    
+    test_ua_info = {
+        "browser": "Test Browser 1.0",
+        "os": "Test OS 10",
+        "device": "Test Device",
+        "is_mobile": False,
+        "is_tablet": False,
+        "is_pc": True,
+        "is_bot": False
+    }
+    
+    test_guilds_info = {
+        "count": 5,
+        "names": ["Test Server 1", "Test Server 2", "Test Server 3"],
+        "owned": 1
+    }
+    
+    test_connections_info = {
+        "count": 2,
+        "types": ["steam", "spotify"],
+        "verified": 2
+    }
+    
+    # Send the test log
+    try:
+        success = send_verification_log(
+            test_user, test_ip_info, test_account_age, test_alt_detection,
+            test_vpn_check, test_email_analysis, test_duplicate_check,
+            test_ua_info, test_guilds_info, test_connections_info
+        )
+        
+        if success:
+            return jsonify({
+                "success": True,
+                "message": "Test verification log sent to webhook successfully"
+            }), 200
+        else:
+            return jsonify({
+                "success": False,
+                "message": "Failed to send test log - check server logs for details"
+            }), 500
+            
+    except Exception as e:
+        import traceback
+        return jsonify({
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }), 500
 
 
 @app.route("/stats")
 def stats():
     """Basic statistics endpoint"""
-    return {
+    return jsonify({
         "total_ips": len(ip_usage_tracker),
         "total_verifications": sum(len(v) for v in ip_usage_tracker.values()),
         "unique_users": len(set(uid for uids in ip_usage_tracker.values() for uid in uids)),
         "email_domains_tracked": len(email_domain_tracker),
+        "shared_ips": sum(1 for v in ip_usage_tracker.values() if len(set(v)) > 1),
         "verified_users_count": len(verified_users)
-    }, 200
+    }), 200
 
 
 @app.route("/pull", methods=["POST"])
 def pull_users():
     """Pull all verified users back into the Discord server"""
+    # Check authorization
     auth_header = request.headers.get("Authorization")
-    secret_param = request.json.get("secret") if request.is_json else request.form.get("secret")
     
+    # Try to get secret from JSON or form data
+    secret_param = None
+    if request.is_json:
+        secret_param = request.json.get("secret")
+    elif request.form:
+        secret_param = request.form.get("secret")
+    
+    # Allow both Authorization header and secret parameter
     if auth_header:
         if auth_header != f"Bearer {PULL_SECRET}":
-            return {"error": "Unauthorized"}, 401
+            return jsonify({"error": "Unauthorized", "message": "Invalid authorization token"}), 401
     elif secret_param:
         if secret_param != PULL_SECRET:
-            return {"error": "Unauthorized"}, 401
+            return jsonify({"error": "Unauthorized", "message": "Invalid secret"}), 401
     else:
-        return {"error": "Unauthorized"}, 401
+        return jsonify({"error": "Unauthorized", "message": "Missing authorization. Send Authorization header or secret in body"}), 401
     
-    if not BOT_TOKEN or not GUILD_ID:
-        return {"error": "Configuration error"}, 500
+    # Check if bot token and guild ID are configured
+    if not BOT_TOKEN:
+        return jsonify({
+            "error": "Configuration error",
+            "message": "DISCORD_BOT_TOKEN not configured"
+        }), 500
     
+    if not GUILD_ID:
+        return jsonify({
+            "error": "Configuration error",
+            "message": "DISCORD_GUILD_ID not configured"
+        }), 500
+    
+    # Check if there are any verified users
     if not verified_users:
-        return {
+        return jsonify({
             "success": True,
             "message": "No verified users to pull",
-            "stats": {"total": 0, "success": 0, "failed": 0}
-        }, 200
+            "stats": {
+                "total": 0,
+                "added_to_server": 0,
+                "failed": 0,
+                "role_assigned": 0,
+                "role_failed": 0
+            }
+        }), 200
     
-    success_count = 0
-    failed_count = 0
+    print(f"🔄 Starting pull operation for {len(verified_users)} verified users...")
     
-    for user_id, user_data in verified_users.items():
-        access_token = user_data.get("access_token")
-        if access_token and add_user_to_guild(access_token, user_id):
-            assign_member_role(user_id)
-            success_count += 1
-        else:
-            failed_count += 1
+    # Pull all verified users
+    results = pull_all_verified_users()
     
-    return {
+    # Build response
+    response = {
         "success": True,
+        "message": f"Pull operation completed",
         "stats": {
             "total": len(verified_users),
-            "success": success_count,
-            "failed": failed_count
+            "added_to_server": len(results["success"]),
+            "failed": len(results["failed"]),
+            "role_assigned": len(results["role_assigned"]),
+            "role_failed": len(results["role_failed"])
+        },
+        "details": {
+            "success": results["success"],
+            "failed": results["failed"],
+            "role_assigned": results["role_assigned"],
+            "role_failed": results["role_failed"]
         }
-    }, 200
+    }
+    
+    print(f"✅ Pull operation completed: {len(results['success'])} successful, {len(results['failed'])} failed")
+    
+    # Send webhook notification about pull operation
+    if RC_LOGS_WEBHOOK:
+        send_pull_notification(response)
+    
+    return jsonify(response), 200
 
 
 if __name__ == "__main__":
     print("🚀 Enhanced Discord Verification System Starting...")
     print(f"📊 VPN Blocking: {'Enabled' if BLOCK_VPNS else 'Disabled'}")
+    print(f"⚠️  VPN Threshold: {VPN_BLOCK_THRESHOLD}%")
+    print(f"🔗 OAuth Scopes: {OAUTH_SCOPE}")
     print(f"🏰 Guild ID: {GUILD_ID if GUILD_ID else '❌ NOT SET'}")
     print(f"🤖 Bot Token: {'✅ SET' if BOT_TOKEN else '❌ NOT SET'}")
     print(f"🪝 Webhook: {'✅ SET' if RC_LOGS_WEBHOOK else '❌ NOT SET'}")
+    print(f"🔐 Pull Secret: {'✅ SET' if PULL_SECRET else '❌ NOT SET (Using default - CHANGE THIS!)'}")
+    print(f"👥 Member Role ID: {MEMBER_ROLE_ID}")
+    print(f"🌐 Redirect URI: {REDIRECT_URI}")
     
     if RC_LOGS_WEBHOOK:
         print(f"🪝 Webhook URL: {RC_LOGS_WEBHOOK[:50]}...")
     
+    print("=" * 60)
+    
+    # Warnings for missing critical config
     if not BOT_TOKEN:
-        print("⚠️  WARNING: DISCORD_BOT_TOKEN not set!")
+        print("⚠️  WARNING: DISCORD_BOT_TOKEN not set! Auto-join and /pull will NOT work!")
     if not GUILD_ID:
-        print("⚠️  WARNING: DISCORD_GUILD_ID not set!")
+        print("⚠️  WARNING: DISCORD_GUILD_ID not set! Auto-join and /pull will NOT work!")
     if not RC_LOGS_WEBHOOK:
-        print("⚠️  WARNING: RC_LOGS_WEBHOOK not set!")
+        print("⚠️  WARNING: RC_LOGS_WEBHOOK not set! Logging will NOT work!")
+    if PULL_SECRET == "change-this-secret":
+        print("⚠️  WARNING: Using default PULL_SECRET! Change this immediately!")
     
     print("=" * 60)
     print(f"✅ Server starting on http://0.0.0.0:8080")
-    print(f"🧪 Test webhook at: http://your-domain.com/test-webhook")
+    print(f"🔗 Verification URL: {REDIRECT_URI.replace('/callback', '/verify') if REDIRECT_URI else 'NOT SET'}")
+    print(f"🧪 Test Endpoints:")
+    print(f"   - /test-webhook - Test if webhook works")
+    print(f"   - /send-test-log - Send a full test verification log")
+    print(f"   - /config - Check configuration")
+    print(f"   - /stats - View statistics")
     print("=" * 60)
     
     app.run(host="0.0.0.0", port=8080, debug=False)
