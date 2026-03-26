@@ -9,12 +9,20 @@
     "deploy": "node src/deploy-commands.js",
     "dev": "node --watch src/index.js"
   },
-  "keywords": ["discord", "bot", "self-modifying", "hot-reload", "vps"],
+  "keywords": [
+    "discord",
+    "bot",
+    "self-modifying",
+    "hot-reload",
+    "vps"
+  ],
   "author": "",
   "license": "MIT",
   "dependencies": {
     "@discordjs/core": "^2.4.0",
+    "@discordjs/rest": "^2.6.1",
     "@discordjs/voice": "^0.18.0",
+    "discord-api-types": "^0.38.42",
     "discord.js": "^14.25.1",
     "dotenv": "^16.4.5"
   },
