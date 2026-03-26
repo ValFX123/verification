@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 import { CommandHandler } from './utils/CommandHandler.js';
 import { Client } from 'discord.js';
 
+// Initialize dotenv configuration
 dotenv.config();
 
 // Validate required environment variables
