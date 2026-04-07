@@ -1,99 +1,267 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import './App.css'
 
-// Sample product data
+// Enhanced product data with descriptions and stock
 const products = [
   {
     id: 1,
     name: 'Minimalist Ceramic Vase',
     price: 49.99,
     originalPrice: 69.99,
-    image: 'https://images.unsplash.com/photo-1581783342308-f792ca11df53?w=400&h=400&fit=crop',
+    image: 'https://images.unsplash.com/photo-1581783342308-f792ca11df53?w=600&h=600&fit=crop',
+    images: [
+      'https://images.unsplash.com/photo-1581783342308-f792ca11df53?w=600&h=600&fit=crop',
+      'https://images.unsplash.com/photo-1578500494198-246f612d3b3d?w=600&h=600&fit=crop',
+      'https://images.unsplash.com/photo-1580480055273-228ff5388ef8?w=600&h=600&fit=crop'
+    ],
+    description: 'Handcrafted ceramic vase with a minimalist design. Perfect for displaying fresh or dried flowers. Made from premium clay with a smooth matte finish.',
     category: 'Home Decor',
     badge: 'sale',
     rating: 4.8,
-    reviews: 124
+    reviews: 124,
+    stock: 15,
+    sku: 'VASE-001'
   },
   {
     id: 2,
     name: 'Organic Cotton Throw Blanket',
     price: 89.99,
     originalPrice: null,
-    image: 'https://images.unsplash.com/photo-1580480055273-228ff5388ef8?w=400&h=400&fit=crop',
+    image: 'https://images.unsplash.com/photo-1580480055273-228ff5388ef8?w=600&h=600&fit=crop',
+    images: [
+      'https://images.unsplash.com/photo-1580480055273-228ff5388ef8?w=600&h=600&fit=crop',
+      'https://images.unsplash.com/photo-1555041469-a586c61ea9bc?w=600&h=600&fit=crop',
+      'https://images.unsplash.com/photo-1580587771525-78b9dba3b91d?w=600&h=600&fit=crop'
+    ],
+    description: 'Luxuriously soft organic cotton throw blanket. Ethically sourced and perfect for cozy evenings. Available in multiple pastel colors.',
     category: 'Textiles',
     badge: 'new',
     rating: 4.9,
-    reviews: 89
+    reviews: 89,
+    stock: 23,
+    sku: 'BLNK-002'
   },
   {
     id: 3,
     name: 'Handcrafted Wooden Bowl Set',
     price: 64.99,
     originalPrice: null,
-    image: 'https://images.unsplash.com/photo-1610701596007-11502861dcfa?w=400&h=400&fit=crop',
+    image: 'https://images.unsplash.com/photo-1610701596007-11502861dcfa?w=600&h=600&fit=crop',
+    images: [
+      'https://images.unsplash.com/photo-1610701596007-11502861dcfa?w=600&h=600&fit=crop',
+      'https://images.unsplash.com/photo-1610701596169-6e2175e5a989?w=600&h=600&fit=crop',
+      'https://images.unsplash.com/photo-1594385208974-2e75f8d7bb48?w=600&h=600&fit=crop'
+    ],
+    description: 'Set of 3 handcrafted wooden bowls made from sustainable acacia wood. Each piece is unique with natural grain patterns. Food-safe finish.',
     category: 'Kitchen',
-    badge: null,
+    badge: 'bestseller',
     rating: 4.7,
-    reviews: 203
+    reviews: 203,
+    stock: 8,
+    sku: 'BOWL-003'
   },
   {
     id: 4,
     name: 'Scented Soy Candle Collection',
     price: 34.99,
     originalPrice: null,
-    image: 'https://images.unsplash.com/photo-1602825418221-7cfee7f6f88b?w=400&h=400&fit=crop',
+    image: 'https://images.unsplash.com/photo-1602825418221-7cfee7f6f88b?w=600&h=600&fit=crop',
+    images: [
+      'https://images.unsplash.com/photo-1602825418221-7cfee7f6f88b?w=600&h=600&fit=crop',
+      'https://images.unsplash.com/photo-1603006905003-be42556265a5?w=600&h=600&fit=crop',
+      'https://images.unsplash.com/photo-1570823336712-6a08a0a9e9ec?w=600&h=600&fit=crop'
+    ],
+    description: 'Collection of 3 hand-poured soy candles with essential oils. Long-lasting burn time with notes of lavender, vanilla, and eucalyptus.',
     category: 'Home Fragrance',
     badge: 'new',
     rating: 4.6,
-    reviews: 156
+    reviews: 156,
+    stock: 42,
+    sku: 'CNDL-004'
   },
   {
     id: 5,
     name: 'Linen Table Runner',
     price: 42.99,
     originalPrice: 54.99,
-    image: 'https://images.unsplash.com/photo-1616627547584-bf28cee262db?w=400&h=400&fit=crop',
+    image: 'https://images.unsplash.com/photo-1616627547584-bf28cee262db?w=600&h=600&fit=crop',
+    images: [
+      'https://images.unsplash.com/photo-1616627547584-bf28cee262db?w=600&h=600&fit=crop',
+      'https://images.unsplash.com/photo-1616486029423-aaa4789e8c9a?w=600&h=600&fit=crop',
+      'https://images.unsplash.com/photo-1534349762913-96c8713d8c91?w=600&h=600&fit=crop'
+    ],
+    description: 'Premium linen table runner with natural texture. Adds elegance to any dining table. Machine washable and gets softer with each wash.',
     category: 'Textiles',
     badge: 'sale',
     rating: 4.8,
-    reviews: 67
+    reviews: 67,
+    stock: 19,
+    sku: 'RUNR-005'
   },
   {
     id: 6,
     name: 'Modern Wall Art Print',
     price: 79.99,
     originalPrice: null,
-    image: 'https://images.unsplash.com/photo-1513519245088-0e12902e5a38?w=400&h=400&fit=crop',
+    image: 'https://images.unsplash.com/photo-1513519245088-0e12902e5a38?w=600&h=600&fit=crop',
+    images: [
+      'https://images.unsplash.com/photo-1513519245088-0e12902e5a38?w=600&h=600&fit=crop',
+      'https://images.unsplash.com/photo-1513519245088-0e12902e5a38?w=600&h=600&fit=crop',
+      'https://images.unsplash.com/photo-1534349762913-96c8713d8c91?w=600&h=600&fit=crop'
+    ],
+    description: 'Contemporary abstract wall art print on premium paper. Framed in sustainable wood. Adds a modern touch to any room.',
     category: 'Home Decor',
     badge: null,
     rating: 4.9,
-    reviews: 234
+    reviews: 234,
+    stock: 31,
+    sku: 'ARTP-006'
   },
   {
     id: 7,
     name: 'Artisan Coffee Mug Set',
     price: 38.99,
     originalPrice: null,
-    image: 'https://images.unsplash.com/photo-1514228742587-6b1558fcca3d?w=400&h=400&fit=crop',
+    image: 'https://images.unsplash.com/photo-1514228742587-6b1558fcca3d?w=600&h=600&fit=crop',
+    images: [
+      'https://images.unsplash.com/photo-1514228742587-6b1558fcca3d?w=600&h=600&fit=crop',
+      'https://images.unsplash.com/photo-1514228742587-6b1558fcca3d?w=600&h=600&fit=crop',
+      'https://images.unsplash.com/photo-1577937927633-2d9f3a2f7c60?w=600&h=600&fit=crop'
+    ],
+    description: 'Set of 4 handmade ceramic coffee mugs. Each mug features a unique glaze pattern. Microwave and dishwasher safe.',
     category: 'Kitchen',
-    badge: null,
+    badge: 'bestseller',
     rating: 4.7,
-    reviews: 178
+    reviews: 178,
+    stock: 27,
+    sku: 'MUGS-007'
   },
   {
     id: 8,
     name: 'Botanical Plant Pot',
     price: 29.99,
     originalPrice: null,
-    image: 'https://images.unsplash.com/photo-1485955900006-10f4d324d411?w=400&h=400&fit=crop',
+    image: 'https://images.unsplash.com/photo-1485955900006-10f4d324d411?w=600&h=600&fit=crop',
+    images: [
+      'https://images.unsplash.com/photo-1485955900006-10f4d324d411?w=600&h=600&fit=crop',
+      'https://images.unsplash.com/photo-1459156212016-c812468e2115?w=600&h=600&fit=crop',
+      'https://images.unsplash.com/photo-1463936575829-25148e1791de?w=600&h=600&fit=crop'
+    ],
+    description: 'Elegant ceramic plant pot with drainage hole. Perfect for succulents and small plants. Includes matching saucer.',
     category: 'Garden',
     badge: 'new',
     rating: 4.8,
-    reviews: 145
+    reviews: 145,
+    stock: 36,
+    sku: 'POTP-008'
+  },
+  {
+    id: 9,
+    name: 'Woven Storage Basket',
+    price: 54.99,
+    originalPrice: null,
+    image: 'https://images.unsplash.com/photo-1595341888016-a392ef81b7de?w=600&h=600&fit=crop',
+    images: [
+      'https://images.unsplash.com/photo-1595341888016-a392ef81b7de?w=600&h=600&fit=crop',
+      'https://images.unsplash.com/photo-1595341888016-a392ef81b7de?w=600&h=600&fit=crop',
+      'https://images.unsplash.com/photo-1534349762913-96c8713d8c91?w=600&h=600&fit=crop'
+    ],
+    description: 'Handwoven storage basket made from natural seagrass. Perfect for organizing blankets, toys, or magazines. Durable and stylish.',
+    category: 'Home Decor',
+    badge: null,
+    rating: 4.7,
+    reviews: 92,
+    stock: 14,
+    sku: 'BSKT-009'
+  },
+  {
+    id: 10,
+    name: 'Marble Serving Tray',
+    price: 72.99,
+    originalPrice: 89.99,
+    image: 'https://images.unsplash.com/photo-1610701596169-6e2175e5a989?w=600&h=600&fit=crop',
+    images: [
+      'https://images.unsplash.com/photo-1610701596169-6e2175e5a989?w=600&h=600&fit=crop',
+      'https://images.unsplash.com/photo-1610701596007-11502861dcfa?w=600&h=600&fit=crop',
+      'https://images.unsplash.com/photo-1594385208974-2e75f8d7bb48?w=600&h=600&fit=crop'
+    ],
+    description: 'Elegant marble serving tray with brass handles. Ideal for entertaining guests or as a decorative piece. Each marble pattern is unique.',
+    category: 'Kitchen',
+    badge: 'sale',
+    rating: 4.9,
+    reviews: 167,
+    stock: 11,
+    sku: 'TRAY-010'
+  },
+  {
+    id: 11,
+    name: 'Cashmere Blend Scarf',
+    price: 95.99,
+    originalPrice: null,
+    image: 'https://images.unsplash.com/photo-1601924994980-42c5b2cb1a99?w=600&h=600&fit=crop',
+    images: [
+      'https://images.unsplash.com/photo-1601924994980-42c5b2cb1a99?w=600&h=600&fit=crop',
+      'https://images.unsplash.com/photo-1580480055273-228ff5388ef8?w=600&h=600&fit=crop',
+      'https://images.unsplash.com/photo-1555041469-a586c61ea9bc?w=600&h=600&fit=crop'
+    ],
+    description: 'Luxuriously soft cashmere blend scarf. Lightweight yet warm. Available in subtle pastel shades to complement any outfit.',
+    category: 'Textiles',
+    badge: 'new',
+    rating: 4.8,
+    reviews: 78,
+    stock: 22,
+    sku: 'SCRF-011'
+  },
+  {
+    id: 12,
+    name: 'Essential Oil Diffuser',
+    price: 58.99,
+    originalPrice: null,
+    image: 'https://images.unsplash.com/photo-1608571423902-eed4a5ad8108?w=600&h=600&fit=crop',
+    images: [
+      'https://images.unsplash.com/photo-1608571423902-eed4a5ad8108?w=600&h=600&fit=crop',
+      'https://images.unsplash.com/photo-1602825418221-7cfee7f6f88b?w=600&h=600&fit=crop',
+      'https://images.unsplash.com/photo-1603006905003-be42556265a5?w=600&h=600&fit=crop'
+    ],
+    description: 'Ultrasonic essential oil diffuser with LED mood lighting. Whisper-quiet operation. Auto shut-off feature for safety.',
+    category: 'Home Fragrance',
+    badge: 'bestseller',
+    rating: 4.7,
+    reviews: 289,
+    stock: 18,
+    sku: 'DIFF-012'
   }
 ]
 
 const categories = ['All', 'Home Decor', 'Textiles', 'Kitchen', 'Home Fragrance', 'Garden']
+
+// Testimonials data
+const testimonials = [
+  {
+    id: 1,
+    name: 'Emma Richardson',
+    role: 'Interior Designer',
+    content: 'The quality of products from Pastel Shop is exceptional. I regularly recommend them to my clients for their minimalist aesthetic and durability.',
+    avatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=100&h=100&fit=crop',
+    rating: 5
+  },
+  {
+    id: 2,
+    name: 'James Chen',
+    role: 'Verified Customer',
+    content: 'Fast shipping and beautiful packaging. The ceramic vase exceeded my expectations. Will definitely be ordering again!',
+    avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=100&h=100&fit=crop',
+    rating: 5
+  },
+  {
+    id: 3,
+    name: 'Sophie Martinez',
+    role: 'Home Blogger',
+    content: 'As someone who writes about home decor, I can confidently say Pastel Shop offers some of the best curated items I\'ve seen. Truly special pieces.',
+    avatar: 'https://images.unsplash.com/photo-1438761681033-6461ffad8d80?w=100&h=100&fit=crop',
+    rating: 5
+  }
+]
 
 function App() {
   const [cart, setCart] = useState([])
