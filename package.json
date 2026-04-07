@@ -1,32 +1,22 @@
 {
-  "name": "self-modifying-discord-bot",
-  "version": "3.0.0",
-  "description": "A self-modifying Discord bot with hot-reloading commands, optimized for VPS deployment",
+  "name": "webshop",
+  "version": "1.0.0",
   "type": "module",
-  "main": "src/index.js",
   "scripts": {
-    "start": "node src/index.js",
-    "deploy": "node src/deploy-commands.js",
-    "dev": "node --watch src/index.js"
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
   },
-  "keywords": [
-    "discord",
-    "bot",
-    "self-modifying",
-    "hot-reload",
-    "vps"
-  ],
+  "keywords": [],
   "author": "",
-  "license": "MIT",
+  "license": "ISC",
+  "description": "",
   "dependencies": {
-    "@discordjs/core": "^2.4.0",
-    "@discordjs/rest": "^2.6.1",
-    "@discordjs/voice": "^0.18.0",
-    "discord-api-types": "^0.38.42",
-    "discord.js": "^14.25.1",
-    "dotenv": "^16.4.5"
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "vite": "^8.0.6"
   },
-  "engines": {
-    "node": ">=18.0.0"
+  "devDependencies": {
+    "@vitejs/plugin-react": "^6.0.1"
   }
 }
